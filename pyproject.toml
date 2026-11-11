@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backlog-assistant"
+version = "1.0.0"
+description = "Configurable FDE Smart Backlog & Requirement Structuring Assistant (Certified-level RDE Submission)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.40.0",
+    "pydantic>=2.7.0",
+    "pypdf>=4.2.0",
+    "python-dotenv>=1.0.1",
+    "rich>=13.7.0",
+    "streamlit>=1.36.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "reportlab>=4.2.0",
+]
+
+[project.scripts]
+backlog-assistant = "backlog_assistant.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

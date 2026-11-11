@@ -1,0 +1,50 @@
+{
+  "scenario_id": "smart_backlog_assistant",
+  "project_title": "Smart Backlog Assistant (FDE Edition)",
+  "domain_name": "Enterprise Cloud & FinTech Engineering",
+  "domain_description": "Transforms unstructured engineering meeting notes, postmortems, and compliance PDFs into deduplicated, schema-validated Agile user stories.",
+  "agent_role": "Staff Forward Deployed Engineer (FDE) and Agile Technical Product Manager",
+  "output_item_label": "User Story",
+  "id_prefix": "STORY",
+  "story_template": "As a <persona>, I want <goal>, so that <measurable engineering/business benefit>",
+  "min_acceptance_criteria": 3,
+  "categories": [
+    "Feature",
+    "Security/Compliance",
+    "Reliability/Tech Debt",
+    "Performance"
+  ],
+  "priority_levels": [
+    "P0 - Critical",
+    "P1 - High",
+    "P2 - Medium",
+    "P3 - Low"
+  ],
+  "priority_rubric": {
+    "P0 - Critical": "Production outage, active security/compliance blocker (e.g., PCI-DSS audit failure), or data-loss risk.",
+    "P1 - High": "Core sprint commitment, high-value enterprise blocker (e.g., SSO/OAuth2), or major SLA degradation.",
+    "P2 - Medium": "Standard feature enhancement, observability improvement, or non-blocking workflow optimization.",
+    "P3 - Low": "Minor UI polish, cosmetic cleanup, or nice-to-have convenience feature."
+  },
+  "estimation_scale": [1, 2, 3, 5, 8, 13],
+  "custom_constraints": [
+    "Cross-reference every requirement against the Existing Backlog items using their IDs.",
+    "Classify each item strictly as NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT.",
+    "Never hallucinate missing SLAs, retention windows, or schemas; list missing specs under summary.open_questions.",
+    "Ensure every acceptance criterion is testable (Given/When/Then or verifiable engineering checklist)."
+  ],
+  "llm_model": "gpt-4o-mini",
+  "temperature": 0.1,
+  "max_retries": 2,
+  "timeout_seconds": 45,
+  "paths": {
+    "baseline_backlog": "data/existing_backlog.json",
+    "samples_dir": "data/samples",
+    "expected_outputs_dir": "data/expected_outputs"
+  },
+  "github": {
+    "enabled": false,
+    "repo": "RicardoRobinson1410/fde-smart-backlog-assistant",
+    "issue_labels": ["fde-generated", "backlog-assistant"]
+  }
+}

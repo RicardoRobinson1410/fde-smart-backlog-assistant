@@ -1,0 +1,15 @@
+{
+  "name": "fde-backlog-kit",
+  "displayName": "FDE Configurable Backlog & Requirement Kit",
+  "version": "1.0.0",
+  "description": "Parameterized bundle of Subagents, MCP servers, Lifecycle Hooks, Rules, and Skills for the RDE Smart Backlog Assistant.",
+  "author": {
+    "name": "Ricardo Robinson",
+    "url": "https://github.com/RicardoRobinson1410"
+  },
+  "suggestedPrompts": [
+    "Analyze data/samples/01_sprint_planning_notes.txt using the active scenario config",
+    "Run the Golden Evaluation Suite across all 3 scenarios and verify deduplication",
+    "Switch the scenario config to SRE Incident Triage and re-evaluate sample 02"
+  ]
+}

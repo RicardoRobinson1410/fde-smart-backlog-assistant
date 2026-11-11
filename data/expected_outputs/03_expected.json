@@ -1,0 +1,56 @@
+{
+  "summary": {
+    "document_title": "PCI-DSS v4.0 Mandatory Security & Audit Specification",
+    "executive_summary": "Defines two mandatory Q4 PCI-DSS v4.0 audit requirements: AES-256-GCM envelope encryption for Redis session payloads (which directly conflicts with FIN-106) and an immutable HMAC-signed security audit log in AWS S3 Object Lock.",
+    "key_themes": [
+      "PCI-DSS v4.0 Field-Level Envelope Encryption",
+      "Architecture Conflict Resolution (FIN-106)",
+      "Immutable Tamper-Evident Security Audit Logging"
+    ],
+    "risks_and_dependencies": [
+      "Existing backlog item FIN-106 proposes plaintext Redis caching, which would cause an immediate PCI-DSS v4.0 audit failure if merged.",
+      "AWS KMS key rotation policies and S3 Object Lock bucket provisioning require Security Operations approval."
+    ],
+    "open_questions": [
+      "Does Legal & Compliance require a 7-year or 10-year cold archival retention window for S3 Object Lock audit logs?"
+    ]
+  },
+  "stories": [
+    {
+      "id": "STORY-001",
+      "title": "AES-256-GCM Envelope Encryption for Redis Checkout Session Payloads",
+      "user_story": "As a Chief Information Security Officer (CISO), I want all cached checkout and cardholder session payloads in Redis encrypted with AES-256-GCM using AWS KMS per-tenant keys, so that the platform passes Q4 PCI-DSS v4.0 compliance.",
+      "technical_description": "Implement client-side AES-256-GCM envelope encryption with KMS data-key caching before writing any checkout payload to Redis, and block/supersede plaintext caching story FIN-106.",
+      "acceptance_criteria": [
+        "Given any checkout session payload written to Redis, when inspected at rest, then all sensitive fields are encrypted with AES-256-GCM and include a KMS key version header.",
+        "Given a compromised or cross-tenant key context, when decryption is attempted, then GCM authentication tag verification fails and raises a SecurityViolationError.",
+        "Envelope encryption/decryption adds less than 3ms p99 latency overhead using local KMS data-key caching."
+      ],
+      "priority": "P0 - Critical",
+      "priority_rationale": "Mandatory Q4 PCI-DSS v4.0 audit blocker that prevents plaintext exposure of sensitive checkout data.",
+      "category": "Security/Compliance",
+      "story_points": 8,
+      "backlog_alignment": "CONFLICT",
+      "related_backlog_ids": ["FIN-106"],
+      "alignment_notes": "Directly conflicts with existing backlog item FIN-106 ('Plaintext Session Payload Caching in Shared Redis Cluster'). FIN-106 must be canceled or replaced by this encrypted implementation."
+    },
+    {
+      "id": "STORY-002",
+      "title": "Immutable HMAC-Signed Security Audit Trail in S3 Object Lock",
+      "user_story": "As a Compliance Auditor, I want every administrative privilege escalation, API key rotation, and SSO configuration change logged as an HMAC-SHA256 signed event in S3 Object Lock, so that audit trails are tamper-evident and verifiable.",
+      "technical_description": "Build an asynchronous audit sink that signs admin security events with HMAC-SHA256 and writes batched JSONL segments to an AWS S3 bucket configured in Compliance Object Lock mode.",
+      "acceptance_criteria": [
+        "Given any RBAC privilege change, API key rotation, or SSO config update, when the action completes, then a signed JSON audit record is persisted within 5 seconds.",
+        "Given a stored audit batch in S3, when the verification CLI checks the HMAC-SHA256 chain, then any tampered or deleted record is immediately detected.",
+        "S3 bucket policy enforces Object Lock WORM protection preventing root/admin deletion prior to retention expiry."
+      ],
+      "priority": "P1 - High",
+      "priority_rationale": "Required for Q4 PCI-DSS v4.0 audit readiness and forensic traceability.",
+      "category": "Security/Compliance",
+      "story_points": 5,
+      "backlog_alignment": "NEW",
+      "related_backlog_ids": [],
+      "alignment_notes": "Net-new compliance audit logging requirement not currently represented in the backlog."
+    }
+  ]
+}

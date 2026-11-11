@@ -1,0 +1,17 @@
+DOCUMENT: Sprint 24 Planning & Enterprise Product Sync Notes
+DATE: 2026-11-10
+ATTENDEES: Lead FDE, Product Manager (Payments), Enterprise Security Lead, Merchant Success
+
+1. Enterprise SSO (Okta & Azure AD SAML/OIDC)
+- Three Tier-1 enterprise merchants blocked onboarding because they require federated SSO via OIDC/SAML 2.0 with JIT role provisioning.
+- Must enforce MFA claims from the IdP token and deprecate the legacy 24-hour cookie flow in FIN-102 for enterprise tenants.
+- Open question: Does the client want IdP-initiated login supported in Phase 1 or only SP-initiated OIDC?
+
+2. Merchant CSV Export Request
+- Customer Success mentioned merchants asking for a button to download monthly settlement transactions as a CSV file from the portal (up to 50k rows).
+- Note: Check if this is already in the backlog so we don't create duplicate tickets.
+
+3. Webhook Delivery Upgrade (Dead-Letter Queue + Exponential Backoff)
+- Regarding FIN-104 (fixed 3x retry at 60s): Enterprise merchants reported lost events during 30-minute maintenance windows.
+- We need to update FIN-104 to use exponential backoff with jitter up to 6 hours and persist exhausted events into an AWS SQS Dead-Letter Queue (DLQ) with a manual replay endpoint.
+- Target p99 enqueue latency isn't specified yet by platform infra.
