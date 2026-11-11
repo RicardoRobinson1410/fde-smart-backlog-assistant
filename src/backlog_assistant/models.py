@@ -65,6 +65,7 @@ class ExecutionMetadata(BaseModel):
     latency_ms: int
     existing_backlog_count: int
     agent_trace: list[str] = Field(default_factory=list, description="Executed LangGraph multi-agent node trace")
+    subagent_models_used: dict[str, str] = Field(default_factory=dict, description="Model assigned to each subagent for cost optimization")
 
 
 class LLMExtractionPayload(BaseModel):

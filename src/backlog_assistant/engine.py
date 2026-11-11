@@ -89,11 +89,12 @@ class BacklogEngine:
                 scenario_id=self.cfg.scenario_id,
                 source_file=initial_state["doc_path"].name,
                 execution_mode=final_state["execution_mode"],
-                model_name=self.cfg.llm_model,
+                model_name=self.cfg.subagent_models.extractor_agent,
                 prompt_version=PROMPT_VERSION,
                 latency_ms=elapsed_ms,
                 existing_backlog_count=len(final_state["existing_items"]),
                 agent_trace=final_state["agent_trace"],
+                subagent_models_used=self.cfg.subagent_models.model_dump(),
             ),
         )
 
@@ -112,13 +113,15 @@ class BacklogEngine:
             payload = self._run_offline(state["doc_path"], state["doc_text"], state["existing_items"])
             mode = "offline_deterministic_replay"
         else:
-            logger.info("[LangGraph: extractor_agent] Running LangChain ChatOpenAI (%s)...", self.cfg.llm_model)
-            payload = self._call_langchain_structured(state["doc_text"], state["existing_items"], state["doc_path"].name)
+            model_id = self.cfg.subagent_models.extractor_agent
+            logger.info("[LangGraph: extractor_agent] Running LangChain ChatOpenAI (%s)...", model_id)
+            payload = self._call_langchain_structured(state["doc_text"], state["existing_items"], state["doc_path"].name, model_id=model_id)
             mode = "live_langchain_langgraph"
         return {"payload": payload, "execution_mode": mode, "agent_trace": [*state["agent_trace"], "extractor_agent"]}
 
     def _node_backlog_auditor(self, state: AgentGraphState) -> dict:
         """Node 3 (Backlog Auditor Subagent): Enforce ScenarioConfig ID prefixes, categories, and deduplication."""
+        logger.info("[LangGraph: backlog_auditor] Auditing with model tier '%s'", self.cfg.subagent_models.backlog_auditor)
         payload = state["payload"]
         assert payload is not None
         for idx, story in enumerate(payload.stories, start=1):
@@ -129,18 +132,19 @@ class BacklogEngine:
 
     def _node_security_reviewer(self, state: AgentGraphState) -> dict:
         """Node 4 (Security & Rubric Subagent): Audit P0/P1 compliance stories and anti-hallucination open_questions."""
+        logger.info("[LangGraph: security_reviewer] Reviewing security with model tier '%s'", self.cfg.subagent_models.security_reviewer)
         payload = state["payload"]
         assert payload is not None
         if not payload.summary.open_questions:
             payload.summary.open_questions.append("Confirm target SLA and compliance sign-off with stakeholders.")
         return {"payload": payload, "agent_trace": [*state["agent_trace"], "security_reviewer"]}
 
-    def _call_langchain_structured(self, doc_text: str, existing_items: list[ExistingBacklogItem], source_name: str) -> LLMExtractionPayload:
+    def _call_langchain_structured(self, doc_text: str, existing_items: list[ExistingBacklogItem], source_name: str, model_id: str | None = None) -> LLMExtractionPayload:
         """Execute LangChain LCEL chain (`ChatPromptTemplate | ChatOpenAI.with_structured_output`)."""
         prompt = ChatPromptTemplate.from_messages([("system", "{system_prompt}"), ("human", "{user_prompt}")])
         llm = ChatOpenAI(
-            api_key=self.api_key, model=self.cfg.llm_model, temperature=self.cfg.temperature,
-            timeout=self.cfg.timeout_seconds, max_retries=self.cfg.max_retries,
+            api_key=self.api_key, model=model_id or self.cfg.subagent_models.extractor_agent,
+            temperature=self.cfg.temperature, timeout=self.cfg.timeout_seconds, max_retries=self.cfg.max_retries,
         )
         chain = prompt | llm.with_structured_output(LLMExtractionPayload)
         res = chain.invoke({

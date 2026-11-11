@@ -32,6 +32,11 @@
     "Ensure every acceptance criterion includes a concrete verification metric (e.g., p99 latency, error budget, alert threshold)."
   ],
   "llm_model": "gpt-4o-mini",
+  "subagent_models": {
+    "extractor_agent": "gpt-4o-mini",
+    "backlog_auditor": "gpt-4o-mini",
+    "security_reviewer": "gpt-4o"
+  },
   "temperature": 0.1,
   "max_retries": 2,
   "timeout_seconds": 45,

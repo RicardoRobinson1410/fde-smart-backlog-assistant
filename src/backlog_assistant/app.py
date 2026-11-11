@@ -23,7 +23,9 @@ def render_app() -> None:
         "agent_role": st.sidebar.text_input("Agent Persona (`agent_role`)", value=base_cfg.agent_role),
         "output_item_label": st.sidebar.text_input("Output Item Label (`output_item_label`)", value=base_cfg.output_item_label),
         "id_prefix": st.sidebar.text_input("ID Prefix (`id_prefix`)", value=base_cfg.id_prefix),
-        "llm_model": st.sidebar.text_input("LLM Model (`llm_model`)", value=base_cfg.llm_model),
+        "subagent_models.extractor_agent": st.sidebar.text_input("Extractor Model (Cheap/Fast)", value=base_cfg.subagent_models.extractor_agent),
+        "subagent_models.backlog_auditor": st.sidebar.text_input("Auditor Model (Cheap/Fast)", value=base_cfg.subagent_models.backlog_auditor),
+        "subagent_models.security_reviewer": st.sidebar.text_input("Security Model (Reasoning)", value=base_cfg.subagent_models.security_reviewer),
     })
     offline = st.sidebar.checkbox("Force Offline Deterministic Mode", value=False)
 

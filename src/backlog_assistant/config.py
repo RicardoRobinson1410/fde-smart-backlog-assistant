@@ -23,6 +23,13 @@ class GitHubConfig(BaseModel):
     issue_labels: list[str] = Field(default_factory=lambda: ["fde-generated", "backlog-assistant"])
 
 
+class SubagentModelsConfig(BaseModel):
+    """Per-subagent model routing configuration to minimize token costs."""
+    extractor_agent: str = "gpt-4o-mini"
+    backlog_auditor: str = "gpt-4o-mini"
+    security_reviewer: str = "gpt-4o"
+
+
 class ScenarioConfig(BaseModel):
     """Centralized, hot-swappable variables defining the problem domain, persona, and rubric."""
     scenario_id: str = "smart_backlog_assistant"
@@ -40,6 +47,7 @@ class ScenarioConfig(BaseModel):
     estimation_scale: list[int] = Field(default_factory=lambda: [1, 2, 3, 5, 8, 13])
     custom_constraints: list[str] = Field(default_factory=list)
     llm_model: str = "gpt-4o-mini"
+    subagent_models: SubagentModelsConfig = Field(default_factory=SubagentModelsConfig)
     temperature: float = 0.1
     max_retries: int = 2
     timeout_seconds: int = 45
@@ -67,6 +75,9 @@ def load_scenario_config(config_path: str | Path | None = None, overrides: dict[
     cfg = ScenarioConfig.model_validate(json.loads(resolved.read_text(encoding="utf-8")) if resolved.exists() else {})
     env_map = {
         "OPENAI_MODEL": "llm_model",
+        "OPENAI_EXTRACTOR_MODEL": "subagent_models.extractor_agent",
+        "OPENAI_AUDITOR_MODEL": "subagent_models.backlog_auditor",
+        "OPENAI_SECURITY_MODEL": "subagent_models.security_reviewer",
         "FDE_DOMAIN_NAME": "domain_name",
         "FDE_AGENT_ROLE": "agent_role",
         "FDE_ID_PREFIX": "id_prefix",

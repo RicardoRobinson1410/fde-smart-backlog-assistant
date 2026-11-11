@@ -189,6 +189,20 @@ def test_langgraph_multi_agent_state_graph_and_mermaid() -> None:
         "backlog_auditor",
         "security_reviewer",
     ]
+    assert result.metadata.subagent_models_used == {
+        "extractor_agent": "gpt-4o-mini",
+        "backlog_auditor": "gpt-4o-mini",
+        "security_reviewer": "gpt-4o",
+    }
+
+    # Verify per-subagent cost-optimization overrides work dynamically
+    custom_cfg = load_scenario_config().with_overrides({
+        "subagent_models.extractor_agent": "gpt-4o-mini",
+        "subagent_models.security_reviewer": "gpt-4o-mini",
+    })
+    res_custom = BacklogEngine(config=custom_cfg, force_offline=True).analyze("data/samples/01_sprint_planning_notes.txt")
+    assert res_custom.metadata.subagent_models_used["security_reviewer"] == "gpt-4o-mini"
+
 
 
 

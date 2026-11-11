@@ -34,6 +34,11 @@
     "Ensure every acceptance criterion is testable (Given/When/Then or verifiable engineering checklist)."
   ],
   "llm_model": "gpt-4o-mini",
+  "subagent_models": {
+    "extractor_agent": "gpt-4o-mini",
+    "backlog_auditor": "gpt-4o-mini",
+    "security_reviewer": "gpt-4o"
+  },
   "temperature": 0.1,
   "max_retries": 2,
   "timeout_seconds": 45,
