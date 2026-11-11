@@ -12,3 +12,4 @@ description: Step-by-step runbook for adapting ScenarioConfig variables, running
    - Run `python -m backlog_assistant.cli analyze <input_path> --output-dir outputs`.
 3. **Run Golden Rubric Verification**:
    - Run `python -m backlog_assistant.cli evaluate` and `pytest` to confirm 100% rubric compliance.
+

@@ -46,3 +46,4 @@ Per the Job Aid constraint (*"Show how AI was used in your development process"*
 1. **Vector / Hybrid Retrieval for Large Backlogs (RAG)**: Injecting the full JSON backlog works well up to ~100 items; for enterprise Jira/GitHub backlogs with 10,000+ tickets, we would add an embedding + BM25 hybrid retrieval pre-filter (top-15 candidate tickets per section) before calling the LLM.
 2. **Async Batch Processing & Token Cost Telemetry**: Switch to `AsyncOpenAI` for multi-document ingestion and persist token/cost metrics to OpenTelemetry / Prometheus.
 3. **Two-Way Jira / Linear / GitHub Webhook Sync**: Extend the existing `gh issue` integration into a bidirectional webhook listener with human-in-the-loop approval in Slack/Teams.
+

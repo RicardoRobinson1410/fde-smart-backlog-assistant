@@ -41,7 +41,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         (out / f"{stem}_result.json").write_text(result.model_dump_json(indent=2), encoding="utf-8")
         (out / f"{stem}_report.md").write_text(result.to_markdown(cfg), encoding="utf-8")
     if args.export_github:
-        for line in export_stories_to_github(result.stories, repo=args.github_repo or cfg.github.repo, labels=cfg.github.issue_labels, dry_run=args.dry_run):
+        for line in export_stories_to_github(result.stories, repo=args.github_repo or cfg.github.repo, labels=cfg.github.issue_labels, dry_run=not args.live_export):
             console.print(f"[magenta]{line}[/magenta]")
     return 0
 
@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         p_an.add_argument(flag)
     p_an.add_argument("--set", action="append", help="Override scenario variable (key=value)")
     p_an.add_argument("--export-github", action="store_true")
-    p_an.add_argument("--dry-run", action="store_true", default=True)
+    p_an.add_argument("--live-export", action="store_true", help="Create real GitHub Issues via PAT instead of dry-run")
     p_an.add_argument("--offline", action="store_true")
     p_an.add_argument("--output-dir", default="outputs")
 

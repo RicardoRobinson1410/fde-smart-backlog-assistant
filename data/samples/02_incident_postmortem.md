@@ -14,3 +14,4 @@
 3. **Open Ambiguities to Confirm with Architecture Team**
    - What is the maximum acceptable automatic failover fee differential when routing from Acquirer-B to Acquirer-A during a brownout?
    - Should half-open probe requests include high-value institutional wire transfers or only card authorizations under $500?
+

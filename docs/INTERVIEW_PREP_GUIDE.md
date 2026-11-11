@@ -47,3 +47,4 @@ Use this guide during your 1-hour interview with the Accenture RDE Global Counci
   - **Subagents (`.agents/plugins/fde-backlog-kit/agents/`)**: Isolate context-heavy review tasks—`backlog-auditor` verifies rubric & deduplication accuracy, while `security-reviewer` checks PCI-DSS/compliance coverage.
   - **MCP Servers (`mcp_config.json`)**: Standardize tool access over `stdio` or `Streamable HTTP` (`/mcp`) so the agent can query local backlogs or remote GitHub Issues through a unified protocol.
   - **Lifecycle Hooks (`hooks.json`)**: Enforce deterministic guardrails outside the LLM—such as our `PreToolUse` gate (`scripts/hooks/pre_tool_gate.py`) that blocks destructive shell commands before execution.
+

@@ -15,3 +15,4 @@ ATTENDEES: Lead FDE, Product Manager (Payments), Enterprise Security Lead, Merch
 - Regarding FIN-104 (fixed 3x retry at 60s): Enterprise merchants reported lost events during 30-minute maintenance windows.
 - We need to update FIN-104 to use exponential backoff with jitter up to 6 hours and persist exhausted events into an AWS SQS Dead-Letter Queue (DLQ) with a manual replay endpoint.
 - Target p99 enqueue latency isn't specified yet by platform infra.
+

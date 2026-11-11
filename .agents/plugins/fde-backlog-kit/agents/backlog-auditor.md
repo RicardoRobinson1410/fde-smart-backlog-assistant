@@ -12,3 +12,4 @@ Always load the active scenario parameters from `config/scenario_config.json` (o
 2. Confirm each item has at least `min_acceptance_criteria` testable Acceptance Criteria.
 3. Verify `backlog_alignment` (`NEW`, `UPDATES_EXISTING`, `DUPLICATE`, `CONFLICT`) accurately cites IDs from `paths.baseline_backlog`.
 4. Confirm missing non-functional specifications are captured in `summary.open_questions` rather than hallucinated.
+

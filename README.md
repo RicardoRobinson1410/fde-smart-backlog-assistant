@@ -132,3 +132,4 @@ streamlit run src/backlog_assistant/app.py
   - Subagents: [`backlog-auditor.md`](.agents/plugins/fde-backlog-kit/agents/backlog-auditor.md) & [`security-reviewer.md`](.agents/plugins/fde-backlog-kit/agents/security-reviewer.md)
   - MCP Servers Schema: [`.agents/plugins/fde-backlog-kit/mcp_config.json`](.agents/plugins/fde-backlog-kit/mcp_config.json)
   - Lifecycle Hooks Schema: [`.agents/plugins/fde-backlog-kit/hooks.json`](.agents/plugins/fde-backlog-kit/hooks.json) & [`scripts/hooks/pre_tool_gate.py`](scripts/hooks/pre_tool_gate.py)
+

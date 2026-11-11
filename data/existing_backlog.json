@@ -48,3 +48,4 @@
     "summary": "Cache full merchant checkout payloads in Redis without field-level encryption to minimize serialization overhead."
   }
 ]
+

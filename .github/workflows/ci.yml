@@ -34,3 +34,4 @@ jobs:
         run: |
           python -m backlog_assistant.cli evaluate --offline
           python -m backlog_assistant.cli evaluate --config config/presets/incident_triage_scenario.json --offline
+
