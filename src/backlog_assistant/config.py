@@ -70,7 +70,7 @@ class ScenarioConfig(BaseModel):
 
 
 def load_scenario_config(config_path: str | Path | None = None, overrides: dict[str, Any] | None = None) -> ScenarioConfig:
-    """Load ScenarioConfig from JSON file, apply environment variables, then apply explicit overrides."""
+    """Load ScenarioConfig from JSON file, apply environment variables (when using default config), then apply explicit overrides."""
     resolved = Path(config_path or os.getenv("SCENARIO_CONFIG_PATH") or DEFAULT_CONFIG_PATH)
     cfg = ScenarioConfig.model_validate(json.loads(resolved.read_text(encoding="utf-8")) if resolved.exists() else {})
     env_map = {
@@ -78,10 +78,13 @@ def load_scenario_config(config_path: str | Path | None = None, overrides: dict[
         "OPENAI_EXTRACTOR_MODEL": "subagent_models.extractor_agent",
         "OPENAI_AUDITOR_MODEL": "subagent_models.backlog_auditor",
         "OPENAI_SECURITY_MODEL": "subagent_models.security_reviewer",
-        "FDE_DOMAIN_NAME": "domain_name",
-        "FDE_AGENT_ROLE": "agent_role",
-        "FDE_ID_PREFIX": "id_prefix",
         "GITHUB_REPO": "github.repo",
     }
+    if config_path is None:
+        env_map.update({
+            "FDE_DOMAIN_NAME": "domain_name",
+            "FDE_AGENT_ROLE": "agent_role",
+            "FDE_ID_PREFIX": "id_prefix",
+        })
     env_overrides = {field: os.getenv(k, "").strip() for k, field in env_map.items() if os.getenv(k, "").strip()}
     return cfg.with_overrides(env_overrides).with_overrides(overrides)

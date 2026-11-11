@@ -70,7 +70,7 @@ def package_submission_zip(root_dir: Path, zip_name: str = "Certified_RDE_Smart_
                 continue
             if any(part in excluded_dirs for part in file_path.parts):
                 continue
-            if file_path.suffix == ".pyc":
+            if file_path.suffix == ".pyc" or file_path.name == ".env":
                 continue
             zf.write(file_path, file_path.relative_to(root_dir))
     return zip_path

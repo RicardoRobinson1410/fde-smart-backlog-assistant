@@ -1,7 +1,7 @@
 """Document ingestion (.txt, .md, .pdf) and GitHub PAT REST API / JSON backlog integration."""
 
 from __future__ import annotations
-import json, logging, os, subprocess, urllib.request
+import json, logging, os, subprocess, urllib.error, urllib.request
 from pathlib import Path
 from pypdf import PdfReader
 from backlog_assistant.models import BacklogAlignment, ExistingBacklogItem, GeneratedUserStory
@@ -13,12 +13,9 @@ SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
 _CACHED_PAT: str | None = None
 
 
-def _resolve_github_pat() -> str:
-    """Resolve GitHub Personal Access Token from GITHUB_PAT, GITHUB_TOKEN, or `gh auth token`."""
+def _resolve_gh_cli_token() -> str:
+    """Resolve active token from `gh auth token` CLI."""
     global _CACHED_PAT
-    token = (os.getenv("GITHUB_PAT") or os.getenv("GITHUB_TOKEN") or "").strip()
-    if token:
-        return token
     if _CACHED_PAT is not None:
         return _CACHED_PAT
     try:
@@ -29,21 +26,39 @@ def _resolve_github_pat() -> str:
         return ""
 
 
+def _resolve_github_pat() -> str:
+    """Resolve GitHub Personal Access Token from GITHUB_PAT, GITHUB_TOKEN, or `gh auth token`."""
+    token = (os.getenv("GITHUB_PAT") or os.getenv("GITHUB_TOKEN") or "").strip()
+    return token or _resolve_gh_cli_token()
+
+
 def _github_api_request(url: str, token: str, method: str = "GET", payload: dict | None = None) -> list | dict:
-    """Execute an authenticated GitHub REST API v3 request using a GitHub PAT."""
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "FDE-Smart-Backlog-Assistant/1.0",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    if data is not None:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    """Execute an authenticated GitHub REST API v3 request with automatic fallback to `gh auth token` on 401."""
+    def _do_req(tok: str) -> list | dict:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "FDE-Smart-Backlog-Assistant/1.0",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    try:
+        return _do_req(token)
+    except urllib.error.HTTPError as err:
+        if err.code == 401:
+            fallback_tok = _resolve_gh_cli_token()
+            if fallback_tok and fallback_tok != token:
+                return _do_req(fallback_tok)
+            if method == "GET":
+                return _do_req("")
+        raise
 
 
 def extract_document_text(file_path: str | Path) -> str:
