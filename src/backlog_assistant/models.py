@@ -64,6 +64,7 @@ class ExecutionMetadata(BaseModel):
     prompt_version: str
     latency_ms: int
     existing_backlog_count: int
+    agent_trace: list[str] = Field(default_factory=list, description="Executed LangGraph multi-agent node trace")
 
 
 class LLMExtractionPayload(BaseModel):

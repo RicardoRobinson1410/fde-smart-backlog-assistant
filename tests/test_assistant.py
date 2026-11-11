@@ -167,9 +167,28 @@ def test_github_pat_live_backlog_test_case() -> None:
 
     # Run BacklogEngine using ONLY the live GitHub repository's Issues as the baseline backlog
     cfg = load_scenario_config().with_overrides({"github.enabled": True, "github.repo": repo})
-    engine = BacklogEngine(config=cfg, force_offline=True)
-    res = engine.analyze("data/samples/01_sprint_planning_notes.txt", backlog_path="", github_repo=repo)
+    res = BacklogEngine(config=cfg, force_offline=True).analyze("data/samples/01_sprint_planning_notes.txt", backlog_path="", github_repo=repo)
     assert res.metadata.existing_backlog_count >= 6
+    assert res.metadata.agent_trace == ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"]
     assert any(s.backlog_alignment == BacklogAlignment.DUPLICATE and "FIN-101" in s.related_backlog_ids for s in res.stories)
+
+
+def test_langgraph_multi_agent_state_graph_and_mermaid() -> None:
+    """Verify the compiled LangGraph StateGraph executes all 4 agent nodes and generates a Mermaid diagram."""
+    engine = BacklogEngine(force_offline=True)
+    mermaid_str = engine.get_graph_mermaid()
+    assert "ingest_node" in mermaid_str
+    assert "extractor_agent" in mermaid_str
+    assert "backlog_auditor" in mermaid_str
+    assert "security_reviewer" in mermaid_str
+
+    result = engine.analyze("data/samples/01_sprint_planning_notes.txt")
+    assert result.metadata.agent_trace == [
+        "ingest_node",
+        "extractor_agent",
+        "backlog_auditor",
+        "security_reviewer",
+    ]
+
 
 
