@@ -262,6 +262,41 @@ def test_task_crud_and_hitl_risk_policy(tmp_path: Path) -> None:
     assert len(audit_file.read_text(encoding="utf-8").splitlines()) == 3
 
 
+def test_memory_bank_and_natural_language_task_intent(tmp_path: Path, monkeypatch) -> None:
+    """Verify FDE Memory Bank persistence and natural-language task creation intent detection."""
+    import backlog_assistant.app as app_mod
+
+    mem_file = tmp_path / "memory_bank.json"
+    monkeypatch.setattr(app_mod, "MEMORY_BANK_PATH", mem_file)
+    cfg = load_scenario_config().with_overrides({
+        "paths.audit_log_path": str(tmp_path / "audit_trail.jsonl"),
+    })
+
+    # 1. Capability question should NOT be misclassified as a task creation command
+    cap_intent = app_mod._detect_task_action_intent("can you create a new task now?", [], None)
+    assert cap_intent is None
+
+    # 2. Natural-language creation request MUST be classified as a create command
+    create_intent = app_mod._detect_task_action_intent(
+        "I need a new task for creating a monitoring center", [], None
+    )
+    assert create_intent is not None
+    assert create_intent["op"] == "create"
+    assert "monitoring center" in create_intent["title"].lower()
+
+    # 3. Memory bank persists decisions and recent turns
+    app_mod.update_memory_bank(
+        cfg,
+        decision="Created FIN-107 (Monitoring center)",
+        user_turn="I need a new task for creating a monitoring center",
+        assistant_turn="Created FIN-107.",
+    )
+    mb = app_mod.load_memory_bank(cfg)
+    assert any("FIN-107" in d.get("decision", "") for d in mb.get("recent_decisions", []))
+    assert len(mb.get("session_turns", [])) >= 1
+
+
+
 
 
 

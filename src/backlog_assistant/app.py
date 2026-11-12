@@ -261,6 +261,59 @@ def _markdown_to_clean_html(md_text: str) -> str:
     return "\n".join(out)
 
 
+MEMORY_BANK_PATH = Path("outputs/memory_bank.json")
+
+
+def load_memory_bank(cfg: ScenarioConfig) -> dict[str, Any]:
+    """Load persistent FDE Memory Bank & Session State from outputs/memory_bank.json."""
+    default_mem: dict[str, Any] = {
+        "scenario_id": cfg.scenario_id,
+        "domain": cfg.domain_name,
+        "recent_decisions": [],
+        "session_turns": [],
+        "active_notes": [
+            "All critical operations (delete, P0 - Critical, Done transitions, FIN-104/FIN-106) require HITL approval.",
+            "Task mutations persist directly to data/existing_backlog.json and outputs/audit_trail.jsonl.",
+        ],
+    }
+    if MEMORY_BANK_PATH.exists():
+        try:
+            loaded = json.loads(MEMORY_BANK_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                default_mem.update(loaded)
+        except Exception:
+            pass
+    return default_mem
+
+
+def update_memory_bank(
+    cfg: ScenarioConfig,
+    decision: str | None = None,
+    user_turn: str | None = None,
+    assistant_turn: str | None = None,
+) -> dict[str, Any]:
+    """Update and persist the FDE Memory Bank & Session State."""
+    mem = load_memory_bank(cfg)
+    if decision:
+        mem["recent_decisions"] = (mem.get("recent_decisions", []) + [
+            {"timestamp": datetime.now(timezone.utc).isoformat(), "decision": decision}
+        ])[-15:]
+    if user_turn or assistant_turn:
+        mem["session_turns"] = (mem.get("session_turns", []) + [
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "user": user_turn or "",
+                "assistant": (assistant_turn or "")[:300],
+            }
+        ])[-12:]
+    try:
+        MEMORY_BANK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MEMORY_BANK_PATH.write_text(json.dumps(mem, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    return mem
+
+
 def _append_task_audit_event(cfg: ScenarioConfig, event: dict[str, Any]) -> None:
     """Append a structured FDE task-mutation / HITL governance event to outputs/audit_trail.jsonl."""
     try:
@@ -319,6 +372,7 @@ def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_b
         save_existing_backlog(items, cfg.paths.baseline_backlog)
         _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
         _append_task_audit_event(cfg, {"event_type": "task_create", "ticket_id": target_id, "approved_by_human": approved_by_human, "item": new_item.model_dump()})
+        update_memory_bank(cfg, decision=f"Created {target_id} ({new_item.title}) [{new_item.priority}, {new_item.status}]")
         return {"ok": True, "op": "create", "ticket": new_item.model_dump(), "message": f"Created task {target_id}: {new_item.title}"}
 
     idx = next((i for i, b in enumerate(items) if b.id.upper() == target_id), None)
@@ -330,6 +384,7 @@ def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_b
         save_existing_backlog(items, cfg.paths.baseline_backlog)
         _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
         _append_task_audit_event(cfg, {"event_type": "task_delete", "ticket_id": target_id, "approved_by_human": approved_by_human, "removed": removed.model_dump()})
+        update_memory_bank(cfg, decision=f"Deleted {target_id} ({removed.title}) [HITL approved={approved_by_human}]")
         return {"ok": True, "op": "delete", "ticket": removed.model_dump(), "message": f"Deleted task {target_id}: {removed.title}"}
 
     cur = items[idx]
@@ -345,6 +400,7 @@ def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_b
     save_existing_backlog(items, cfg.paths.baseline_backlog)
     _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
     _append_task_audit_event(cfg, {"event_type": f"task_{op}", "ticket_id": target_id, "approved_by_human": approved_by_human, "before": cur.model_dump(), "after": updated.model_dump()})
+    update_memory_bank(cfg, decision=f"{op.upper()} {target_id}: status={updated.status}, priority={updated.priority}")
     return {"ok": True, "op": op, "ticket": updated.model_dump(), "message": f"Updated {target_id} ({updated.status} • {updated.priority})"}
 
 
@@ -355,10 +411,15 @@ def _detect_task_action_intent(
 ) -> dict[str, Any] | None:
     """Detect if the user is asking to create, modify, move, or delete a backlog task."""
     q = message.strip()
-    q_low = q.lower()
+    q_low = q.lower().rstrip("?.!")
+
+    # Ignore pure capability questions like "can you create a new task now?"
+    if q_low.startswith(("can you ", "could you ", "are you able", "do you ")) and len(q_low.split()) <= 8 and "for " not in q_low and "named " not in q_low and "called " not in q_low:
+        return None
+
     action_verbs = [
-        "create", "add task", "new task", "add ticket", "new ticket",
-        "move", "change status", "set status",
+        "create", "add task", "new task", "add ticket", "new ticket", "need a task", "need a new task",
+        "make a task", "make a new task", "move", "change status", "set status",
         "update", "modify", "edit", "rename", "change priority", "set priority",
         "delete", "remove", "drop",
     ]
@@ -369,15 +430,16 @@ def _detect_task_action_intent(
     if api_key:
         try:
             sys_p = (
-                "You are an FDE Task Intent Extractor. Determine if the user's message is a command to "
-                "CREATE, UPDATE/MODIFY, MOVE (status change), or DELETE a task in the backlog.\n"
-                "Return ONLY valid JSON with keys:\n"
+                "You are an FDE Task Intent Extractor. Determine if the user wants to CREATE, UPDATE/MODIFY, MOVE (status change), or DELETE a task.\n"
+                "CRITICAL: Requests like 'I need a new task for creating a monitoring center', 'Create a task for X', 'Add a ticket to Y', 'Move FIN-101 to In Progress', 'Delete FIN-103' ARE ALL task commands (is_task_command=true)!\n"
+                "Only set is_task_command=false if the user is purely asking a yes/no question about your capabilities without specifying any task.\n"
+                "Return ONLY valid JSON:\n"
                 '{"is_task_command": true/false, "op": "create"|"update"|"move"|"delete", '
-                '"id": "FIN-101 or empty string for create", "title": "...", '
-                '"status": "To Do"|"In Progress"|"In Review / HITL"|"Done" or empty string, '
-                '"priority": "P0 - Critical"|"P1 - High"|"P2 - Medium" or empty string, '
-                '"category": "Feature"|"Security"|"Infrastructure" or empty string, '
-                '"summary": "..."}\n'
+                '"id": "FIN-101 or empty string for create", "title": "Concise actionable title", '
+                '"status": "To Do"|"In Progress"|"In Review / HITL"|"Done" or "To Do" for create, '
+                '"priority": "P0 - Critical"|"P1 - High"|"P2 - Medium" or "P1 - High" for create, '
+                '"category": "Feature"|"Security"|"Infrastructure"|"Observability", '
+                '"summary": "Clear 1-sentence engineering summary"}\n'
                 f"Existing backlog IDs: {[b.get('id') for b in backlog]}"
             )
             req_body = json.dumps({
@@ -423,16 +485,16 @@ def _detect_task_action_intent(
         return {"is_task_command": True, "op": "move", "id": target_id, "status": status}
     if any(w in q_low for w in ["update", "modify", "edit", "rename", "change priority", "set priority"]) and target_id:
         return {"is_task_command": True, "op": "update", "id": target_id, "priority": pri, "status": status}
-    if any(w in q_low for w in ["create", "add task", "new task", "add ticket", "new ticket"]):
-        clean_title = re.sub(r"^(create|add)\s+(a\s+)?(new\s+)?(p[0-2]\s+)?(critical\s+)?(task|ticket|story)\s*(to|for|:)?\s*", "", q, flags=re.IGNORECASE).strip()
+    if any(w in q_low for w in ["create", "add task", "new task", "add ticket", "new ticket", "need a task", "need a new task", "make a task"]):
+        clean_title = re.sub(r"^(i\s+need\s+a\s+new\s+task\s+for\s+|create\s+(a\s+)?(new\s+)?(p[0-2]\s+)?(critical\s+)?(task|ticket|story)\s*(to|for|:)?\s*|add\s+(a\s+)?(new\s+)?(task|ticket)\s*(to|for|:)?\s*)", "", q, flags=re.IGNORECASE).strip()
         return {
             "is_task_command": True,
             "op": "create",
             "id": target_id,
-            "title": clean_title[:90] or "New Engineering Task",
+            "title": clean_title[:90].capitalize() or "New Engineering Task",
             "status": status or "To Do",
             "priority": pri or "P1 - High",
-            "category": "Security" if ("pci" in q_low or "security" in q_low) else "Feature",
+            "category": "Security" if ("pci" in q_low or "security" in q_low) else ("Observability" if "monitor" in q_low else "Feature"),
             "summary": q,
         }
     return None
@@ -551,6 +613,7 @@ def _answer_with_live_openai_or_analytical_engine(
     # Try Live OpenAI API first if OPENAI_API_KEY is configured (using stdlib urllib to avoid numpy/C-extension thread import collisions)
     if api_key:
         try:
+            memory_bank = load_memory_bank(cfg)
             context_payload = {
                 "active_document": active_doc["filename"] if active_doc else "All Scenarios (01_sprint_planning_notes.txt, 02_incident_postmortem.md, 03_pci_compliance_spec.pdf)",
                 "stories_in_scope": [
@@ -570,12 +633,16 @@ def _answer_with_live_openai_or_analytical_engine(
                     for s in all_stories
                 ],
                 "existing_baseline_backlog": backlog,
+                "memory_bank": memory_bank,
             }
 
             sys_prompt = (
                 "You are the FDE Smart Backlog Conversational Agent. Answer the user's question directly, accurately, "
                 "and conversationally based on the exact project stories, Fibonacci story points, priorities, conflicts, "
-                "acceptance criteria, and baseline backlog (FIN-101..FIN-106) provided below.\n"
+                "acceptance criteria, baseline backlog (FIN-101..FIN-106), and persistent FDE Memory Bank provided below.\n"
+                "- IMPORTANT CAPABILITIES: You HAVE full local Task CRUD capabilities (`create`, `update`, `move`, `delete` on `data/existing_backlog.json`) "
+                "with Human-in-the-Loop (HITL) approval gates for critical operations (`delete`, `P0 - Critical`, `Done`/`In Review / HITL` transitions, and security-sensitive tickets like FIN-104/FIN-106). "
+                "NEVER claim you cannot create, edit, move, or delete tasks! If the user asks 'can you create a new task now?', confirm YES clearly and tell them they can just state the task (e.g., 'Create a task for monitoring center' or 'I need a new task for ...') and you will execute it immediately (with HITL approval for critical actions).\n"
                 "- NEVER invent fake user story cards unless the user explicitly asks to create/draft a new story.\n"
                 "- When asked which task is harder/hardest, rank the tasks explicitly by Fibonacci Story Points (8 pts is hardest, then 5 pts, then 3 pts, then 2 pts), priority (P0 - Critical > P1 - High > P2 - Medium), architectural blast radius, and whether they have a CONFLICT or HITL gate.\n"
                 "- Cite specific ticket IDs (e.g., STORY-002, STORY-001, FIN-104, FIN-106), Fibonacci points, and concrete technical reasons.\n"
@@ -610,6 +677,7 @@ def _answer_with_live_openai_or_analytical_engine(
             with urllib.request.urlopen(req, timeout=15) as resp:
                 resp_json = json.loads(resp.read().decode("utf-8"))
             md_answer = str(resp_json["choices"][0]["message"]["content"]).strip()
+            update_memory_bank(cfg, user_turn=q, assistant_turn=md_answer)
 
             steps.append(
                 {
@@ -2465,13 +2533,13 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
         },
         {
             "node_idx": 3,
-            "wire_ids": ["w2", "w3"],
+            "wire_ids": ["w2", "w3", "w6"],
             "agent": f"🔍 Subagent 3: backlog-auditor ({aud_model})",
-            "badge": "DEDUPLICATION • $0.00006",
+            "badge": "DEDUPLICATION + MEMORY BANK • $0.00006",
             "badge_color": "#4285f4",
-            "thought": "Cross-referenced extracted stories against FIN-101..FIN-106 via fde-backlog-stdio MCP.",
-            "action": "Classified stories as NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT.",
-            "delta": "Attached related_backlog_ids and alignment_notes to every story.",
+            "thought": "Cross-referenced extracted stories against FIN-101..FIN-106 via fde-backlog-stdio MCP and loaded outputs/memory_bank.json session state.",
+            "action": "Classified stories (NEW, UPDATES_EXISTING, DUPLICATE, CONFLICT) and persisted Task CRUD + session context to Memory Bank.",
+            "delta": "Attached related_backlog_ids, alignment_notes, and HITL risk policy gates.",
         },
         {
             "node_idx": 4,
@@ -2562,6 +2630,9 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           <path id="w5" class="wire" d="M 375 118 L 445 218" stroke="#4285f4" marker-start="url(#ar-c)" marker-end="url(#ar-c)" />
           <text x="435" y="172" fill="#8ab4f8" font-size="9.5" font-weight="700">⇄ stdio MCP</text>
 
+          <path id="w6" class="wire" d="M 820 118 L 715 218" stroke="#f59e0b" marker-start="url(#ar-p)" marker-end="url(#ar-p)" />
+          <text x="772" y="172" fill="#fcd34d" font-size="9.5" font-weight="700">⇄ Memory + CRUD</text>
+
           <path id="w7" class="wire" d="M 1065 118 L 1015 218" stroke="#10a37f" marker-end="url(#ar-g)" />
           <text x="1065" y="172" fill="#6ee7b7" font-size="9.5" font-weight="700">⟶ Kanban &amp; JSONL</text>
 
@@ -2617,6 +2688,13 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
             <text x="327" y="242" fill="#8ab4f8" font-size="9.5" font-weight="700">STDIO MCP SERVER</text>
             <text x="327" y="264" fill="#fff" font-size="12" font-weight="700">🔌 fde-backlog-stdio</text>
             <text x="327" y="284" fill="#9aa0a6" font-size="10">Loads existing_backlog.json</text>
+          </g>
+
+          <g class="node-box" onclick="selectStep(3)">
+            <rect class="card" x="585" y="220" width="255" height="92" rx="11" fill="#0d0d0d" stroke="#f59e0b" stroke-width="2"/>
+            <text x="597" y="242" fill="#fcd34d" font-size="9.5" font-weight="700">FDE MEMORY BANK &amp; TASK CRUD</text>
+            <text x="597" y="264" fill="#fff" font-size="12" font-weight="700">🧠 memory_bank.json + HITL</text>
+            <text x="597" y="284" fill="#9aa0a6" font-size="10">Session State, Decisions &amp; Backlog</text>
           </g>
 
           <g class="node-box" onclick="selectStep(4)">
