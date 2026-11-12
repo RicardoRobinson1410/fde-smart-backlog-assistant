@@ -3281,8 +3281,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 unsafe_allow_html=True,
             )
 
-    st.markdown("#### 📡 Real-Time Cost, Token & Circuit-Breaker Monitor (Live Telemetry)")
-    budget_cap = st.slider("🚨 Hard Spend Circuit-Breaker Cap ($ USD):", min_value=1.0, max_value=100.0, value=10.0, step=1.0)
+    st.markdown("#### 📡 Real-Time Cost & Token Monitor (Live Telemetry)")
     finops_port = int(_CHAT_SERVER_STATE.get("port") or 8765)
     live_monitor_html = f"""
     <!DOCTYPE html>
@@ -3312,7 +3311,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         <div class="kpi">
           <div class="lbl">Actual Spend (USD)</div>
           <div class="val" id="k-cost" style="color:#10a37f;">$0.00000</div>
-          <div class="sub" id="k-cap">Cap: ${budget_cap:.2f} (HEALTHY)</div>
+          <div class="sub">Real OpenAI API spend</div>
         </div>
         <div class="kpi">
           <div class="lbl">Observed Tokens</div>
@@ -3335,7 +3334,6 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         <tbody id="finops-rows"><tr><td colspan="6" style="color:#8e8e8e;">Loading live telemetry...</td></tr></tbody>
       </table>
       <script>
-        const BUDGET_CAP = {budget_cap:.2f};
         async function pollFinops() {{
           try {{
             const resp = await fetch('http://127.0.0.1:{finops_port}/api/finops');
@@ -3343,9 +3341,6 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             const d = await resp.json();
             const actualCost = Number(d.total_cost_usd || 0);
             document.getElementById('k-cost').innerText = '$' + actualCost.toFixed(5);
-            document.getElementById('k-cap').innerText = actualCost <= BUDGET_CAP
-              ? `Cap: $${{BUDGET_CAP.toFixed(2)}} (✅ HEALTHY)`
-              : `Cap: $${{BUDGET_CAP.toFixed(2)}} (🛑 TRIPPED)`;
             document.getElementById('k-tok').innerText = Number(d.total_tokens || 0).toLocaleString();
             document.getElementById('k-live-tok').innerText = 'Live API tokens: ' + Number(d.live_tokens || 0).toLocaleString();
             document.getElementById('k-save').innerText = '$' + Number(d.saved_usd || 0).toFixed(5);
