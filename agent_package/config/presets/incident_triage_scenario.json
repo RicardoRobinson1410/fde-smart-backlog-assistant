@@ -1,0 +1,50 @@
+{
+  "scenario_id": "incident_remediation_triage",
+  "project_title": "AI Incident & Root-Cause Triage Assistant",
+  "domain_name": "Site Reliability Engineering (SRE) & Cloud Operations",
+  "domain_description": "Processes outage logs, postmortems, and runbook PDFs against known problem tickets to generate prioritized remediation tasks.",
+  "agent_role": "Principal Site Reliability Engineer (SRE) & Incident Commander",
+  "output_item_label": "Remediation Action Item",
+  "id_prefix": "REM",
+  "story_template": "As an <SRE/service owner>, I need to <remediation action>, so that <MTTR/reliability SLA impact>",
+  "min_acceptance_criteria": 3,
+  "categories": [
+    "Immediate Mitigation",
+    "Root-Cause Fix",
+    "Observability/Alerting",
+    "Runbook Automation"
+  ],
+  "priority_levels": [
+    "P0 - Critical",
+    "P1 - High",
+    "P2 - Medium",
+    "P3 - Low"
+  ],
+  "priority_rubric": {
+    "P0 - Critical": "Active customer-facing SEV-1 impact or recurring cascading failure vector.",
+    "P1 - High": "Prevents repeat outage or closes a blind spot in production alerting within current sprint.",
+    "P2 - Medium": "Reduces toil or improves secondary service resilience.",
+    "P3 - Low": "Long-term architectural cleanup or documentation refinement."
+  },
+  "estimation_scale": [1, 2, 3, 5, 8, 13],
+  "custom_constraints": [
+    "Map every remediation action against existing problem tickets to avoid duplicate engineering work.",
+    "Ensure every acceptance criterion includes a concrete verification metric (e.g., p99 latency, error budget, alert threshold)."
+  ],
+  "llm_model": "gpt-4o-mini",
+  "subagent_models": {
+    "extractor_agent": "gpt-4o-mini",
+    "backlog_auditor": "gpt-4o-mini",
+    "security_reviewer": "gpt-4o"
+  },
+  "temperature": 0.1,
+  "max_retries": 2,
+  "timeout_seconds": 45,
+  "paths": {
+    "baseline_backlog": "data/projects/incident_triage_backlog.json",
+    "samples_dir": "data/projects/incident_triage_samples",
+    "expected_outputs_dir": "data/expected_outputs",
+    "audit_log_path": "outputs/projects/incident_triage_audit_trail.jsonl"
+  }
+}
+

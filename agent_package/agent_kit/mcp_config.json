@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "fde-backlog-stdio": {
+      "command": "python",
+      "args": ["-m", "backlog_assistant.cli", "evaluate", "--offline"],
+      "cwd": "c:/Proyectos/FDE_accenture/FDE PROJECT",
+      "env": {
+        "SCENARIO_CONFIG_PATH": "${SCENARIO_CONFIG_PATH}",
+        "OPENAI_MODEL": "${OPENAI_MODEL}"
+      },
+      "disabled": false,
+      "variables": [
+        {
+          "name": "SCENARIO_CONFIG_PATH",
+          "title": "Scenario Configuration Path",
+          "description": "Path to JSON scenario file (default: config/scenario_config.json)"
+        },
+        {
+          "name": "OPENAI_MODEL",
+          "title": "LLM Model Name",
+          "description": "Model identifier (default: gpt-4o-mini)"
+        }
+      ]
+    }
+  }
+}
+

@@ -1,0 +1,58 @@
+{
+  "summary": {
+    "document_title": "SEV-1 Checkout Gateway Cascading Timeout Postmortem (INC-2026-884)",
+    "executive_summary": "Addresses the root causes of the 19-minute SEV-1 payment outage by introducing an adaptive circuit breaker with automatic failover to Acquirer-A and updating FIN-105 to enforce 4.5s timeouts with bulkhead connection isolation.",
+    "key_themes": [
+      "Adaptive Circuit Breaker & Multi-Acquirer Failover",
+      "HTTP Timeout & Bulkhead Isolation (FIN-105)",
+      "Prometheus & PagerDuty Observability"
+    ],
+    "risks_and_dependencies": [
+      "Automatic failover to Secondary Acquirer-A may increase per-transaction processing fees during brownouts.",
+      "Requires load-testing at 4,200+ req/s to validate bulkhead pool sizing (150 sockets)."
+    ],
+    "open_questions": [
+      "What is the maximum acceptable automatic failover fee differential when routing from Acquirer-B to Acquirer-A?",
+      "Should half-open circuit probe requests include high-value institutional wire transfers or only card authorizations under $500?"
+    ]
+  },
+  "stories": [
+    {
+      "id": "STORY-001",
+      "title": "Adaptive Acquirer Circuit Breaker with Automated Failover Routing",
+      "user_story": "As a Checkout Platform SRE, I want an adaptive circuit breaker that trips when upstream failure/timeout rates exceed 25% over 30s and routes traffic to Acquirer-A, so that single-acquirer latency spikes cannot cause cascading checkout outages.",
+      "technical_description": "Implement a state-machine circuit breaker (Closed -> Open -> Half-Open) around Acquirer-B client calls, configure automatic failover routing to Acquirer-A, and emit Prometheus state metrics + PagerDuty alerts.",
+      "acceptance_criteria": [
+        "Given a 30-second rolling window with >= 25% timeout/5xx errors on Acquirer-B, when the threshold is breached, then the circuit trips OPEN within 500ms and routes subsequent requests to Acquirer-A.",
+        "Given an OPEN circuit for 60 seconds, when entering HALF-OPEN state, then probe requests validate upstream recovery before closing the circuit.",
+        "Prometheus exports `acquirer_circuit_state` gauge metrics and triggers a PagerDuty alert if OPEN duration exceeds 60 seconds."
+      ],
+      "priority": "P0 - Critical",
+      "priority_rationale": "Direct remediation for a customer-facing SEV-1 cascading payment outage.",
+      "category": "Reliability/Tech Debt",
+      "story_points": 8,
+      "backlog_alignment": "NEW",
+      "related_backlog_ids": ["FIN-105"],
+      "alignment_notes": "Net-new resilience pattern complementing the timeout configuration in FIN-105."
+    },
+    {
+      "id": "STORY-002",
+      "title": "Enforce 4.5s Acquirer HTTP Timeout and 150-Socket Bulkhead Pool",
+      "user_story": "As a Backend Payment Engineer, I want upstream acquirer HTTP calls bounded to a 4.5-second timeout and isolated in a 150-connection bulkhead pool, so that slow upstream responses cannot exhaust global worker threads.",
+      "technical_description": "Update FIN-105 from a static 30s socket timeout to a 1.5s connect / 3.0s read timeout (4.5s total budget) and configure isolated connection pools capped at 150 concurrent sockets per acquirer.",
+      "acceptance_criteria": [
+        "Given an upstream acquirer call exceeding 4.5 seconds total elapsed time, when the deadline expires, then the client aborts immediately and raises a typed AcquirerTimeoutError.",
+        "Given 150 concurrent in-flight requests to Acquirer-B, when request 151 arrives, then it fails fast via bulkhead rejection without starving Acquirer-A worker threads.",
+        "Load test at 4,200 req/s confirms zero global worker pool exhaustion when Acquirer-B latency is injected at 30 seconds."
+      ],
+      "priority": "P0 - Critical",
+      "priority_rationale": "Eliminates the thread-starvation vector that caused INC-2026-884.",
+      "category": "Performance",
+      "story_points": 5,
+      "backlog_alignment": "UPDATES_EXISTING",
+      "related_backlog_ids": ["FIN-105"],
+      "alignment_notes": "Directly replaces the unsafe 30s timeout specification in existing backlog item FIN-105."
+    }
+  ]
+}
+

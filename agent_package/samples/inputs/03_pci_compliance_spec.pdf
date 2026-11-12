@@ -1,0 +1,50 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 1082 >>
+stream
+BT
+/F1 11 Tf
+50 750 Td
+14 TL
+(DOCUMENT: PCI-DSS v4.0 Mandatory Security & Audit Specification \(Q4 Audit Gate\)) Tj T*
+(CLASSIFICATION: Mandatory Engineering Compliance Requirements) Tj T*
+() Tj T*
+(Requirement 1: Envelope Encryption for Cached Checkout Payloads \(CONFLICTS WITH FIN-106\)) Tj T*
+(- All cached merchant checkout and cardholder session payloads in Redis MUST use AES-256-GCM) Tj T*
+(  envelope encryption backed by AWS KMS per-tenant data keys.) Tj T*
+(- NOTE: This directly conflicts with existing backlog item FIN-106 \(Plaintext Session Payload) Tj T*
+(  Caching in Shared Redis Cluster\), which must be superseded or blocked immediately.) Tj T*
+() Tj T*
+(Requirement 2: Immutable Tamper-Evident Security Audit Trail \(NEW\)) Tj T*
+(- Every administrative privilege escalation, API key rotation, and SSO configuration change) Tj T*
+(  must emit a structured JSON audit event signed with HMAC-SHA256 to an append-only S3 Object) Tj T*
+(  Lock bucket.) Tj T*
+(- Retention window for cold archival storage \(7 years vs 10 years\) is pending Legal sign-off.) Tj T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000001375 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1445
+%%EOF
