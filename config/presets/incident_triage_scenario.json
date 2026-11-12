@@ -42,7 +42,7 @@
   "timeout_seconds": 45,
   "paths": {
     "baseline_backlog": "data/projects/incident_triage_backlog.json",
-    "samples_dir": "data/samples",
+    "samples_dir": "data/projects/incident_triage_samples",
     "expected_outputs_dir": "data/expected_outputs",
     "audit_log_path": "outputs/projects/incident_triage_audit_trail.jsonl"
   }

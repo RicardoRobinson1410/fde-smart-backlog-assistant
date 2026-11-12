@@ -133,23 +133,25 @@ def load_audit_history(audit_path: str | Path) -> list[dict[str, Any]]:
 
 
 def ensure_initial_telemetry(cfg: ScenarioConfig) -> list[dict[str, Any]]:
-    """Seed baseline telemetry across all 3 scenarios on first portal launch."""
+    """Seed baseline telemetry for the active project if sample documents exist."""
     history = load_audit_history(cfg.paths.audit_log_path)
-    if not history:
+    sample_files = [
+        p for p in sorted(Path(cfg.paths.samples_dir).glob("*"))
+        if p.suffix.lower() in {".txt", ".md", ".pdf"}
+    ]
+    if not history and sample_files:
         seed_engine = BacklogEngine(config=cfg, force_offline=True)
-        for s_file in sorted(Path(cfg.paths.samples_dir).glob("*")):
-            if s_file.suffix.lower() in {".txt", ".md", ".pdf"}:
-                res = seed_engine.analyze(s_file)
-                if "latest_result" not in st.session_state:
-                    st.session_state["latest_result"] = res
-                    st.session_state["active_doc_path"] = str(s_file)
+        for s_file in sample_files:
+            res = seed_engine.analyze(s_file)
+            if "latest_result" not in st.session_state:
+                st.session_state["latest_result"] = res
+                st.session_state["active_doc_path"] = str(s_file)
         history = load_audit_history(cfg.paths.audit_log_path)
-    elif "latest_result" not in st.session_state:
+    elif "latest_result" not in st.session_state and sample_files:
         default_doc = Path(cfg.paths.samples_dir) / "01_sprint_planning_notes.txt"
-        st.session_state["latest_result"] = BacklogEngine(config=cfg, force_offline=True).analyze(default_doc)
-        st.session_state["active_doc_path"] = str(default_doc)
-    if "custom_alerts" not in st.session_state:
-        st.session_state["custom_alerts"] = []
+        pick_doc = default_doc if default_doc.exists() else sample_files[0]
+        st.session_state["latest_result"] = BacklogEngine(config=cfg, force_offline=True).analyze(pick_doc)
+        st.session_state["active_doc_path"] = str(pick_doc)
     return history
 
 
@@ -2846,8 +2848,8 @@ def render_doc_to_tasks_pipeline_tab(cfg: ScenarioConfig) -> None:
     """Tab 3: Dedicated 4-Stage Document-to-Tasks Extraction, Deduplication & Batch HITL Pipeline."""
     st.markdown("### 📥 Document-to-Tasks Multi-Agent Pipeline")
     st.caption(
-        "Upload any specification, sprint notes, or postmortem (`.txt`, `.md`, `.pdf`) to extract **all** actionable tasks, "
-        "deduplicate against `FIN-101..FIN-106`, review in a single **HITL Approval Gate**, and persist to the Jira Kanban board."
+        f"Upload any specification, sprint notes, or postmortem (`.txt`, `.md`, `.pdf`) to extract **all** actionable tasks, "
+        f"deduplicate against **{cfg.project_title}** (`{cfg.id_prefix}` backlog), review in a single **HITL Approval Gate**, and persist to the Kanban board."
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -2903,7 +2905,8 @@ def render_doc_to_tasks_pipeline_tab(cfg: ScenarioConfig) -> None:
                         "summary": f"{s.user_story} | {align_notes} | AC-1: {s.acceptance_criteria[0] if s.acceptance_criteria else ''}".strip(),
                     })
 
-                st.session_state["doc_pipeline_run"] = {
+                pipe_key = f"doc_pipeline_run_{cfg.scenario_id}"
+                st.session_state[pipe_key] = {
                     "filename": uploaded.name,
                     "sha256": doc_sha[:14],
                     "pii_count": pii_count,
@@ -2914,7 +2917,8 @@ def render_doc_to_tasks_pipeline_tab(cfg: ScenarioConfig) -> None:
                     "proposed": proposed,
                 }
 
-    run_data = st.session_state.get("doc_pipeline_run")
+    pipe_key = f"doc_pipeline_run_{cfg.scenario_id}"
+    run_data = st.session_state.get(pipe_key)
     if run_data:
         st.divider()
         m1, m2, m3, m4, m5 = st.columns(5)
@@ -2952,15 +2956,15 @@ def render_doc_to_tasks_pipeline_tab(cfg: ScenarioConfig) -> None:
                     st.success(f"Approved and persisted {len(created_msgs)} task(s) to `{cfg.paths.baseline_backlog}`! Switch to **Tab 2 (Kanban Board)** to see all of them.")
                     for msg in created_msgs:
                         st.write(f"- {msg}")
-                    st.session_state.pop("doc_pipeline_run", None)
+                    st.session_state.pop(pipe_key, None)
             with col_no:
                 if st.button("❌ Reject Batch", key="pipe_reject_btn"):
                     _append_task_audit_event(
                         cfg,
                         {"event_type": "task_batch_rejected", "filename": run_data["filename"], "count": len(proposed), "approved_by_human": False},
                     )
-                    st.info("Batch rejected and logged to `outputs/audit_trail.jsonl`.")
-                    st.session_state.pop("doc_pipeline_run", None)
+                    st.info(f"Batch rejected and logged to `{cfg.paths.audit_log_path}`.")
+                    st.session_state.pop(pipe_key, None)
 
 
 def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
@@ -3255,7 +3259,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             "$0.15 / 1M in • $0.60 / 1M out",
             "$0.00006 / doc",
             "#a855f7",
-            "Deduplicates stories against FIN-101..FIN-106 using fast structured comparison.",
+            f"Deduplicates stories against existing `{cfg.id_prefix}` backlog items using fast structured comparison.",
         ),
         (
             s4,
@@ -3287,9 +3291,9 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     st.markdown("#### 📡 Real-Time Cost, Budgeting & Token Alerts")
     b_col1, b_col2 = st.columns(2)
     with b_col1:
-        budget_limit = st.number_input("💵 Live Budget Limit ($ USD):", min_value=0.50, max_value=500.0, value=5.00, step=0.50)
+        budget_limit = st.number_input("💵 Live Budget Limit ($ USD):", min_value=0.50, max_value=500.0, value=5.00, step=0.50, key=f"finops_budget_{cfg.scenario_id}")
     with b_col2:
-        token_threshold = st.number_input("🚨 Per-Execution Token Alert Threshold:", min_value=200, max_value=50000, value=1800, step=100)
+        token_threshold = st.number_input("🚨 Per-Execution Token Alert Threshold:", min_value=200, max_value=50000, value=1800, step=100, key=f"finops_tok_{cfg.scenario_id}")
 
     finops_port = int(_CHAT_SERVER_STATE.get("port") or 8765)
     live_monitor_html = f"""
@@ -3318,7 +3322,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     </head>
     <body>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12px; color:#9ca3af;">
-        <span><span class="live-dot"></span>Streaming actual observed telemetry from <code>outputs/audit_trail.jsonl</code> (auto-refresh 2s)</span>
+        <span><span class="live-dot"></span>Streaming actual observed telemetry for <strong>{cfg.project_title}</strong> from <code>{cfg.paths.audit_log_path}</code> (auto-refresh 2s)</span>
         <span id="last-sync">Connecting...</span>
       </div>
       <div class="grid">
@@ -4403,14 +4407,14 @@ def render_searchable_error_and_log_portal(
     """Tab 7: Production FDE Observability, Security & Audit Log Explorer."""
     st.markdown("### 🚨 Production Audit, Security & Error Explorer")
     st.caption(
-        "Real-time observability backed by `outputs/audit_trail.jsonl`. Filter by category or keyword and "
-        "**click anywhere on any log row** to inspect its execution trace, SHA-256 provenance, and JSON payload."
+        f"Real-time observability for **{cfg.project_title}** backed by `{cfg.paths.audit_log_path}`. "
+        "Filter by category or keyword and **click anywhere on any log row** to inspect its execution trace, SHA-256 provenance, and JSON payload."
     )
 
     include_offline = st.checkbox(
         "Include offline deterministic replay logs (test/cache runs)",
         value=False,
-        key="logs_include_offline",
+        key=f"logs_include_offline_{cfg.scenario_id}",
     )
     all_events = build_unified_events(cfg, latest, history, include_offline=include_offline)
 
@@ -4636,41 +4640,67 @@ def _discover_projects() -> dict[str, str]:
     return projects
 
 
-def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
-    """Tab 8: Project Switcher, Create New Project, and Clean Essential Settings."""
-    st.markdown("### ⚙️ Project & Settings")
-    st.caption("Switch between projects, create a new project with its own backlog, or adjust essential AI & privacy settings.")
-
+def _render_active_project_bar() -> str:
+    """Global FDE multi-tenant project bar shown at the top of every tab."""
     projects = _discover_projects()
     labels = list(projects.keys())
     paths = list(projects.values())
 
-    active_path = st.session_state.get("active_project_path", paths[0] if paths else "config/scenario_config.json")
+    default_path = paths[0] if paths else "config/scenario_config.json"
+    if "active_project_path" not in st.session_state or st.session_state["active_project_path"] not in paths:
+        st.session_state["active_project_path"] = default_path
+
+    active_path = st.session_state["active_project_path"]
     default_idx = paths.index(active_path) if active_path in paths else 0
 
-    col_switch, col_create = st.columns([1.2, 1.0])
-    with col_switch:
-        with st.container(border=True):
-            st.markdown("#### 📂 Active Project")
+    with st.container(border=True):
+        c_sel, c_meta = st.columns([1.4, 2.6])
+        with c_sel:
             sel_label = st.selectbox(
-                "Switch Project",
+                "📂 Active Project",
                 labels,
                 index=default_idx,
-                key="active_project_selector",
+                key="global_project_selector",
+                help="Every tab (Chat, Kanban, Pipeline, Agent Graph, FinOps, Evals, Logs) displays data strictly isolated to this project.",
             )
             sel_path = projects[sel_label]
-            if sel_path != st.session_state.get("active_project_path"):
+            if sel_path != active_path:
                 st.session_state["active_project_path"] = sel_path
                 st.session_state.pop("latest_result", None)
                 st.session_state.pop("active_doc_path", None)
                 st.rerun()
 
-            base_cfg = load_scenario_config(sel_path)
-            st.caption(
-                f"**Domain:** {base_cfg.domain_name}  \n"
-                f"**Ticket Prefix:** `{base_cfg.id_prefix}-001` • **Backlog:** `{base_cfg.paths.baseline_backlog}`"
+        preview_cfg = load_scenario_config(active_path)
+        if preview_cfg.scenario_id != "smart_backlog_assistant" and preview_cfg.paths.audit_log_path == "outputs/audit_trail.jsonl":
+            preview_cfg = preview_cfg.with_overrides({
+                "paths.audit_log_path": f"outputs/projects/{preview_cfg.scenario_id}_audit_trail.jsonl"
+            })
+        n_backlog = len(load_existing_backlog(preview_cfg.paths.baseline_backlog))
+        n_audit = len(load_audit_history(preview_cfg.paths.audit_log_path))
+        pii_badge = "🛡️ PII Shield ON" if preview_cfg.enable_pii_redaction else "⚠️ PII Shield OFF"
+        with c_meta:
+            st.markdown(
+                f"**{preview_cfg.project_title}** &nbsp;·&nbsp; `Domain: {preview_cfg.domain_name}` &nbsp;·&nbsp; "
+                f"`Prefix: {preview_cfg.id_prefix}` &nbsp;·&nbsp; `Model: {preview_cfg.subagent_models.extractor_agent}` &nbsp;·&nbsp; `{pii_badge}`"
             )
+            st.caption(
+                f"Isolated workspace: **{n_backlog}** backlog item(s) (`{preview_cfg.paths.baseline_backlog}`) • "
+                f"**{n_audit}** audit event(s) (`{preview_cfg.paths.audit_log_path}`). "
+                "To create or configure projects, open **⚙️ 8. Project & Settings**."
+            )
+    return active_path
 
+
+def render_settings_and_custom_upload_tab(active_path: str) -> tuple[ScenarioConfig, bool]:
+    """Tab 8: Active Project Settings & Isolation Info + Create New Project."""
+    st.markdown("### ⚙️ Project & Settings")
+    st.caption("Configure the currently selected project or create a new isolated project workspace.")
+
+    col_switch, col_create = st.columns([1.2, 1.0])
+    with col_switch:
+        with st.container(border=True):
+            base_cfg = load_scenario_config(active_path)
+            st.markdown(f"#### 🛠️ Settings — {base_cfg.project_title}")
             has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
             offline = not has_key
             if has_key:
@@ -4680,16 +4710,16 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
 
             st.markdown("##### Essential Settings")
             s1, s2 = st.columns(2)
-            new_title = s1.text_input("Project Name", value=base_cfg.project_title, key=f"set_title_{sel_path}")
-            new_domain = s2.text_input("Domain", value=base_cfg.domain_name, key=f"set_dom_{sel_path}")
+            new_title = s1.text_input("Project Name", value=base_cfg.project_title, key=f"set_title_{active_path}")
+            new_domain = s2.text_input("Domain", value=base_cfg.domain_name, key=f"set_dom_{active_path}")
             s3, s4, s5 = st.columns(3)
-            new_prefix = s3.text_input("Ticket Prefix", value=base_cfg.id_prefix, key=f"set_pre_{sel_path}")
+            new_prefix = s3.text_input("Ticket Prefix", value=base_cfg.id_prefix, key=f"set_pre_{active_path}")
             model_opts = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
             cur_model = base_cfg.subagent_models.extractor_agent
             if cur_model not in model_opts:
                 model_opts.insert(0, cur_model)
-            new_model = s4.selectbox("AI Model", model_opts, index=model_opts.index(cur_model), key=f"set_mod_{sel_path}")
-            pii_guard = s5.toggle("🛡️ Privacy PII Shield", value=base_cfg.enable_pii_redaction, key=f"set_pii_{sel_path}")
+            new_model = s4.selectbox("AI Model", model_opts, index=model_opts.index(cur_model), key=f"set_mod_{active_path}")
+            pii_guard = s5.toggle("🛡️ Privacy PII Shield", value=base_cfg.enable_pii_redaction, key=f"set_pii_{active_path}")
 
             overrides: dict[str, Any] = {
                 "project_title": new_title.strip() or base_cfg.project_title,
@@ -4704,9 +4734,22 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
                 overrides["paths.audit_log_path"] = f"outputs/projects/{base_cfg.scenario_id}_audit_trail.jsonl"
             cfg = base_cfg.with_overrides(overrides)
 
-            if st.button("💾 Save Project Settings", key=f"save_proj_{sel_path}"):
-                Path(sel_path).write_text(cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
-                st.success(f"Saved settings to `{sel_path}`!")
+            eval_dir = (
+                "outputs/evals/runs"
+                if cfg.scenario_id == "smart_backlog_assistant"
+                else f"outputs/evals/runs/{cfg.scenario_id}"
+            )
+            st.caption(
+                f"**Isolated Data Stores**  \n"
+                f"• Backlog: `{cfg.paths.baseline_backlog}`  \n"
+                f"• Samples: `{cfg.paths.samples_dir}`  \n"
+                f"• Audit Log: `{cfg.paths.audit_log_path}`  \n"
+                f"• Eval Runs: `{eval_dir}`"
+            )
+
+            if st.button("💾 Save Project Settings", key=f"save_proj_{active_path}"):
+                Path(active_path).write_text(cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                st.success(f"Saved settings to `{active_path}`!")
 
     with col_create:
         with st.container(border=True):
@@ -4726,11 +4769,13 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
                         slug = re.sub(r"[^a-z0-9]+", "_", p_name.strip().lower()).strip("_") or "project"
                         cfg_path = Path("config/projects") / f"{slug}.json"
                         backlog_path = Path("data/projects") / f"{slug}_backlog.json"
+                        samples_path = Path("data/projects") / f"{slug}_samples"
                         if cfg_path.exists():
                             st.error(f"Project `{slug}` already exists.")
                         else:
                             cfg_path.parent.mkdir(parents=True, exist_ok=True)
                             backlog_path.parent.mkdir(parents=True, exist_ok=True)
+                            samples_path.mkdir(parents=True, exist_ok=True)
                             backlog_path.write_text("[]\n", encoding="utf-8")
                             audit_path = Path("outputs/projects") / f"{slug}_audit_trail.jsonl"
                             new_cfg = load_scenario_config("config/scenario_config.json").with_overrides({
@@ -4743,6 +4788,7 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
                                 "subagent_models.extractor_agent": p_model,
                                 "subagent_models.backlog_auditor": p_model,
                                 "paths.baseline_backlog": str(backlog_path).replace("\\", "/"),
+                                "paths.samples_dir": str(samples_path).replace("\\", "/"),
                                 "paths.audit_log_path": str(audit_path).replace("\\", "/"),
                             })
                             cfg_path.write_text(new_cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -4758,8 +4804,7 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
 def render_portal() -> None:
     st.markdown(CHATGPT_DARK_CSS, unsafe_allow_html=True)
 
-    default_cfg = load_scenario_config("config/scenario_config.json")
-    history = ensure_initial_telemetry(default_cfg)
+    active_path = _render_active_project_bar()
 
     # Top-level separated tabs — Tab 1 opens directly into the pure ChatGPT "Where should we begin?" view!
     tab_chat, tab_kanban, tab_pipeline, tab_graph, tab_finops, tab_evals, tab_alerts, tab_settings = st.tabs([
@@ -4774,9 +4819,10 @@ def render_portal() -> None:
     ])
 
     with tab_settings:
-        cfg, offline = render_settings_and_custom_upload_tab()
+        cfg, offline = render_settings_and_custom_upload_tab(active_path)
 
     _CHAT_SERVER_STATE["cfg"] = cfg
+    history = ensure_initial_telemetry(cfg)
     latest: BacklogAnalysisResult | None = st.session_state.get("latest_result")
     if latest is None or latest.metadata.scenario_id != cfg.scenario_id:
         latest = BacklogAnalysisResult(
@@ -4799,7 +4845,6 @@ def render_portal() -> None:
             },
         )
         st.session_state["latest_result"] = latest
-    history = load_audit_history(cfg.paths.audit_log_path)
     bundle = build_all_scenarios_bundle(cfg)
     _CHAT_SERVER_STATE["bundle"] = bundle
 
