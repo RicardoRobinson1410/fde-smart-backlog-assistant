@@ -8,6 +8,11 @@ By externalizing all domain, persona, rubric, and integration variables into [`c
 
 ## 1. Problem Definition (Required Step 1)
 
+> [!NOTE]
+> **Evaluation Guide & Agent Asset Inspection**:
+> - To check **only the AI Agent, Subagents, MCPs, Hooks, Prompts, and Tools**, inspect the dedicated [**`agent/`**](file:///c:/Proyectos/FDE_accenture/FDE%20PROJECT/agent) folder. It isolates all AI agent components cleanly away from the UI code.
+> - The directory [**`src/backlog_assistant/`**](file:///c:/Proyectos/FDE_accenture/FDE%20PROJECT/src/backlog_assistant) is the **active execution package** that powers the Streamlit web dashboard (`app.py`), the CLI interface (`cli.py`), and the automated pytest evaluation suite. **Do not delete `src/backlog_assistant/`**, as it is needed to execute and test the application!
+
 ### The Engineering Challenge
 Forward Deployed Engineers (FDEs) and Agile engineering teams lose hours every sprint translating fragmented, high-noise inputs—raw meeting notes, incident postmortems, and formal compliance PDFs—into structured, sprint-ready backlog items. Worse, manual backlog grooming frequently introduces:
 1. **Duplicate Tickets**: Re-creating stories that are already in progress (`DUPLICATE`).

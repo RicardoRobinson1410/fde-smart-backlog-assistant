@@ -1,11 +1,16 @@
 # AI Agent, Subagents, MCP, Hooks & Tools Architecture
 
-This folder gathers **only the AI agent assets** used in the Smart Backlog Assistant solution, separated from the UI (`app.py`), CLI formatting (`cli.py`), and test evaluation harnesses (`evaluation.py`).
+> [!IMPORTANT]
+> **Evaluation & Code Review Note**:
+> Reviewers evaluating the **AI Agent, Prompt Engineering, Subagents, MCP, Hooks, and Tools implementation** only need to inspect this **`agent/`** folder!
+> 
+> The code in `src/backlog_assistant/` contains the runnable Python package (including the Streamlit web portal `app.py`, terminal CLI `cli.py`, and test harness `evaluation.py`). **Do NOT delete `src/backlog_assistant/`**, as `app.py`, `pytest`, and the interactive UI rely on it to execute. The `agent/` folder is the condensed, clean extraction dedicated strictly to checking the agentic components without the UI noise.
 
 ## Structure
 
 ```
 agent/
+├── README.md                    # This architecture and evaluation guide
 ├── plugin.json                  # Antigravity / IDE plugin manifest
 ├── agents/                      # Main Agent Orchestration & Prompts
 │   ├── engine.py                # 4-node LangGraph StateGraph (Ingest -> Extractor -> Auditor -> Security Reviewer)
@@ -39,3 +44,4 @@ agent/
    - **`backlog_auditor` subagent (`subagents/backlog-auditor.md`)**: Compares stories against existing tickets to classify `NEW`, `UPDATES_EXISTING`, `DUPLICATE`, or `CONFLICT`.
    - **`security_reviewer` subagent (`subagents/security-reviewer.md` via `gpt-4o`)**: Conducts frontier-model compliance & blast-radius checks, flagging critical items for Human-in-the-Loop (HITL) approval.
 4. **Schema Guardrails (`tools/models.py`)**: Pydantic v2 validates output structure, guaranteeing that every accepted story contains at least 3 testable acceptance criteria.
+
