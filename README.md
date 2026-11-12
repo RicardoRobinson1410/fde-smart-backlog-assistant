@@ -115,14 +115,26 @@ python -m backlog_assistant.cli analyze data/samples/01_sprint_planning_notes.tx
 # Run the 3-scenario Golden Rubric Scorecard table
 python -m backlog_assistant.cli evaluate
 
-# Run the automated pytest verification suite
+# Run the 12-case Golden Evaluation Suite (offline baseline or live + AI Judge)
+python -m backlog_assistant.evaluation --offline
+
+# Run the automated pytest verification suite (18 tests)
 python -m pytest -v
 ```
 
-### Launch Interactive Streamlit Workbench
+### Launch Interactive Streamlit Workbench (8-Tab FDE Portal)
 ```powershell
 python -m streamlit run src/backlog_assistant/app.py
 ```
+The Streamlit portal includes:
+1. **Ask ChatGPT**: Multi-turn conversational agent with `.txt`/`.md`/`.pdf` upload and HITL task approval.
+2. **Kanban Board**: Jira-style drag-and-drop board synced with the active project's backlog JSON.
+3. **Doc-to-Tasks Pipeline**: 4-stage batch extraction, deduplication, and HITL approval gate.
+4. **FinOps & Cost Savings**: Per-stage model routing telemetry, budget alerts, and savings tracking.
+5. **Agent Evaluation Lab**: 12-case golden dataset browser, custom test case creator, deterministic checks + calibrated AI Judge.
+6. **Error & Log Explorer**: Searchable audit & security event inspector backed by project-scoped JSONL logs.
+7. **Agent & MCP Graph**: Interactive 5-stage LangGraph/Subagent/MCP/Hook topology and reasoning stream.
+8. **Project & Settings**: Multi-project switcher, isolated project creator (`backlog`, `samples`, `audit_log`, `evals`), and PII Shield toggle.
 
 ---
 

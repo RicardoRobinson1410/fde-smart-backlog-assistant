@@ -123,7 +123,7 @@ def test_custom_scenario_preset_and_ad_hoc_document(tmp_path: Path) -> None:
     res = engine.analyze(custom_doc)
     assert res.stories[0].id == "REM-001"
     assert res.stories[0].category in sre_cfg.categories
-    assert "FIN-103" in res.stories[0].related_backlog_ids  # Matched PostgreSQL Read-Replica in existing_backlog.json
+    assert "REM-103" in res.stories[0].related_backlog_ids  # Matched REM-103 in isolated incident_triage_backlog.json
 
 
 def test_pre_tool_use_hook_contract() -> None:

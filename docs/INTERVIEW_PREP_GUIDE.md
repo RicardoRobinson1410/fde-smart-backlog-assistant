@@ -22,11 +22,11 @@ Use this guide during your 1-hour interview with the Accenture RDE Global Counci
      --set id_prefix=SRE
    ```
    *Highlight*: Show that without changing any code, the persona, rubric, categories, and ticket IDs (`SRE-001`) adapt to Site Reliability Engineering.
-3. **Show the Interactive Streamlit UI (60s)**:
+3. **Show the Interactive 8-Tab FDE Streamlit Portal (60s)**:
    ```powershell
-   streamlit run src/backlog_assistant/app.py
+   python -m streamlit run src/backlog_assistant/app.py
    ```
-   *Highlight*: Tweak a variable live in the left sidebar and download the Markdown/JSON report.
+   *Highlight*: Show the **Active Project** badge in the top-left, switch projects in **Tab 8 (Project & Settings)** to demonstrate per-project data isolation (Kanban, FinOps, Evals, Audit Logs), run a case in **Tab 5 (Agent Evaluation Lab)** with the calibrated AI Judge, and inspect the 5-stage pipeline in **Tab 7 (Agent & MCP Graph)**.
 
 ---
 
