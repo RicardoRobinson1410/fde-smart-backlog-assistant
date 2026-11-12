@@ -23,6 +23,7 @@ class ExistingBacklogItem(BaseModel):
     priority: str = "P2 - Medium"
     category: str = "Feature"
     summary: str
+    story_points: int | None = None
 
 
 class RequirementSummary(BaseModel):

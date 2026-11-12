@@ -351,6 +351,23 @@ def _classify_task_action_risk(action: dict[str, Any], backlog: list[dict[str, A
     return False, "Standard P1/P2 backlog operation (auto-approved under FDE policy & logged to audit_trail.jsonl)."
 
 
+def _resolve_story_points(points: Any, priority: str = "P1 - High") -> int:
+    """Resolve valid Fibonacci Story Points from explicit value or priority rubric."""
+    try:
+        if points is not None and int(points) > 0:
+            return int(points)
+    except (TypeError, ValueError):
+        pass
+    pri_up = str(priority or "").upper()
+    if "P0" in pri_up or "CRITICAL" in pri_up:
+        return 8
+    if "P1" in pri_up or "HIGH" in pri_up:
+        return 5
+    if "P3" in pri_up or "LOW" in pri_up:
+        return 2
+    return 3
+
+
 def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_by_human: bool = False) -> dict[str, Any]:
     """Execute create/update/move/delete on the local JSON backlog store and emit an audit trail record."""
     items = load_existing_backlog(cfg.paths.baseline_backlog)
@@ -362,13 +379,16 @@ def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_b
             nums = [int(m.group(1)) for b in items if (m := re.search(r"(\d+)$", b.id))]
             next_num = max(nums, default=106) + 1
             target_id = f"FIN-{next_num}"
+        pri_val = str(action.get("priority") or "P1 - High").strip()
+        sp_val = _resolve_story_points(action.get("points") or action.get("story_points"), pri_val)
         new_item = ExistingBacklogItem(
             id=target_id,
             title=str(action.get("title") or "New Engineering Task").strip(),
             status=str(action.get("status") or "To Do").strip(),
-            priority=str(action.get("priority") or "P1 - High").strip(),
+            priority=pri_val,
             category=str(action.get("category") or "Feature").strip(),
             summary=str(action.get("summary") or action.get("title") or "Created via FDE Conversational Agent.").strip(),
+            story_points=sp_val,
         )
         items.append(new_item)
         save_existing_backlog(items, cfg.paths.baseline_backlog)
@@ -390,13 +410,19 @@ def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_b
         return {"ok": True, "op": "delete", "ticket": removed.model_dump(), "message": f"Deleted task {target_id}: {removed.title}"}
 
     cur = items[idx]
+    next_pri = str(action.get("priority") or cur.priority).strip()
+    next_sp = _resolve_story_points(
+        action.get("points") if action.get("points") is not None else (action.get("story_points") if action.get("story_points") is not None else cur.story_points),
+        next_pri,
+    )
     updated = ExistingBacklogItem(
         id=cur.id,
         title=str(action.get("title") or cur.title).strip(),
         status=str(action.get("status") or cur.status).strip(),
-        priority=str(action.get("priority") or cur.priority).strip(),
+        priority=next_pri,
         category=str(action.get("category") or cur.category).strip(),
         summary=str(action.get("summary") or cur.summary).strip(),
+        story_points=next_sp,
     )
     items[idx] = updated
     save_existing_backlog(items, cfg.paths.baseline_backlog)
@@ -440,6 +466,7 @@ def _detect_task_action_intent(
                 '"id": "FIN-101 or empty string for create", "title": "Concise actionable title", '
                 '"status": "To Do"|"In Progress"|"In Review / HITL"|"Done" or "To Do" for create, '
                 '"priority": "P0 - Critical"|"P1 - High"|"P2 - Medium" or "P1 - High" for create, '
+                '"points": 1|2|3|5|8|13, '
                 '"category": "Feature"|"Security"|"Infrastructure"|"Observability", '
                 '"summary": "Detailed 2-3 sentence FDE engineering description covering objective, implementation scope, and testable acceptance criteria", '
                 '"missing_details": ["list of any critical clarifying questions if the request is too vague, else []"]}\n'
@@ -471,6 +498,8 @@ def _detect_task_action_intent(
     # Deterministic fallback intent parser
     id_match = re.search(r"\b(FIN-\d+|STORY-\d+)\b", q, re.IGNORECASE)
     target_id = id_match.group(1).upper() if id_match else ""
+    sp_match = re.search(r"\b(\d+)\s*(?:sp|pts?|story\s*points?)\b", q_low)
+    explicit_sp = int(sp_match.group(1)) if sp_match else None
     pri = "P0 - Critical" if "p0" in q_low or "critical" in q_low else ("P1 - High" if "p1" in q_low or "high" in q_low else ("P2 - Medium" if "p2" in q_low or "medium" in q_low else ""))
     status = ""
     if "done" in q_low:
@@ -486,19 +515,21 @@ def _detect_task_action_intent(
         return {"is_task_command": True, "op": "delete", "id": target_id}
     if any(w in q_low for w in ["move", "change status", "set status"]) and target_id and status:
         return {"is_task_command": True, "op": "move", "id": target_id, "status": status}
-    if any(w in q_low for w in ["update", "modify", "edit", "rename", "change priority", "set priority"]) and target_id:
-        return {"is_task_command": True, "op": "update", "id": target_id, "priority": pri, "status": status}
+    if any(w in q_low for w in ["update", "modify", "edit", "rename", "change priority", "set priority", "story points", "sp"]) and target_id:
+        return {"is_task_command": True, "op": "update", "id": target_id, "priority": pri, "status": status, "points": explicit_sp}
     if any(w in q_low for w in ["create", "add task", "new task", "add ticket", "new ticket", "need a task", "need a new task", "make a task"]):
         clean_title = re.sub(r"^(i\s+need\s+a\s+new\s+task\s+for\s+|create\s+(a\s+)?(new\s+)?(p[0-2]\s+)?(critical\s+)?(task|ticket|story)\s*(to|for|:)?\s*|add\s+(a\s+)?(new\s+)?(task|ticket)\s*(to|for|:)?\s*)", "", q, flags=re.IGNORECASE).strip()
         final_title = clean_title[:90].capitalize() or "New Engineering Task"
         final_cat = "Security" if ("pci" in q_low or "security" in q_low) else ("Observability" if "monitor" in q_low else "Feature")
+        final_pri = pri or "P1 - High"
         return {
             "is_task_command": True,
             "op": "create",
             "id": target_id,
             "title": final_title,
             "status": status or "To Do",
-            "priority": pri or "P1 - High",
+            "priority": final_pri,
+            "points": _resolve_story_points(explicit_sp, final_pri),
             "category": final_cat,
             "summary": (
                 f"Objective: {final_title}. Scope: Design and implement {final_title.lower()} within the {final_cat} domain, "
@@ -1765,6 +1796,7 @@ def render_chatgpt_conversational_first_tab(
                       ${{a.category ? 'Category: ' + a.category + '<br/>' : ''}}
                       ${{a.status ? 'Target Status: ' + a.status + '<br/>' : ''}}
                       ${{a.priority ? 'Priority: ' + a.priority + '<br/>' : ''}}
+                      ${{a.points ? 'Story Points: ' + a.points + ' SP<br/>' : ''}}
                       ${{a.summary ? 'Description: ' + a.summary : ''}}
                     </div>
                     <div style="font-size:11.5px; color:#9ca3af; margin-bottom:10px;">Review the drafted details above. Click <strong>Approve &amp; Execute</strong> to persist, or reply in chat to refine priority, category, or scope.</div>
@@ -2033,8 +2065,8 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             "issue_type": "task",
             "alignment": f"BASELINE",
             "priority": b.priority,
-            "points": 3,
-            "category": "FINTECH BASELINE",
+            "points": _resolve_story_points(b.story_points, b.priority),
+            "category": b.category.upper() if b.category else "FINTECH BASELINE",
             "assignee": {"name": "Platform Team", "initials": "PT", "color": "#059669"},
             "confidence": 100,
             "requires_hitl": False,
@@ -2704,14 +2736,16 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             const mappedBaseline = tasks.map(b => {{
               const stLow = (b.status || '').toLowerCase();
               const col = stLow.includes('progress') ? 'prog' : (stLow.includes('done') ? 'done' : (stLow.includes('review') || stLow.includes('hitl') ? 'hitl' : 'todo'));
+              const priStr = b.priority || 'P1 - High';
+              const spPts = b.story_points || (priStr.includes('P0') ? 8 : (priStr.includes('P1') ? 5 : (priStr.includes('P3') ? 2 : 3)));
               return {{
                 id: b.id,
                 title: b.title,
                 column: col,
                 issue_type: 'task',
                 alignment: 'BASELINE',
-                priority: b.priority || 'P1 - High',
-                points: 3,
+                priority: priStr,
+                points: spPts,
                 category: (b.category || 'FINTECH BASELINE').toUpperCase(),
                 assignee: {{ name: 'Platform Team', initials: 'PT', color: '#059669' }},
                 confidence: 100,
