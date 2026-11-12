@@ -749,6 +749,19 @@ def _answer_with_live_openai_or_analytical_engine(
             with urllib.request.urlopen(req, timeout=15) as resp:
                 resp_json = json.loads(resp.read().decode("utf-8"))
             md_answer = str(resp_json["choices"][0]["message"]["content"]).strip()
+            usage = resp_json.get("usage") or {}
+            p_tok = int(usage.get("prompt_tokens", 0) or 0)
+            c_tok = int(usage.get("completion_tokens", 0) or 0)
+            t_tok = int(usage.get("total_tokens", p_tok + c_tok) or 0)
+            live_cost = round((p_tok * 0.15 + c_tok * 0.60) / 1_000_000.0, 6)
+            if t_tok > 0:
+                _append_task_audit_event(cfg, {
+                    "event_type": "live_chat_turn",
+                    "source_file": f"Chat: {q[:38]}",
+                    "estimated_tokens": t_tok,
+                    "estimated_cost_usd": live_cost,
+                    "stories_generated": len(all_stories),
+                })
             update_memory_bank(cfg, user_turn=q, assistant_turn=md_answer)
 
             steps.append(
@@ -893,18 +906,28 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                 cur_cfg = _CHAT_SERVER_STATE["cfg"]
                 audit_rows = load_audit_history(cur_cfg.paths.audit_log_path)
                 total_tokens = sum(int(r.get("estimated_tokens", 0) or 0) for r in audit_rows)
-                total_cost = sum(float(r.get("estimated_cost_usd", 0.0) or 0.0) for r in audit_rows)
+                total_cost = 0.0
+                for r in audit_rows:
+                    r_tok = int(r.get("estimated_tokens", 0) or 0)
+                    r_cost = float(r.get("estimated_cost_usd", 0.0) or 0.0)
+                    total_cost += r_cost if r_cost > 0 else (r_tok / 1_000_000.0) * 0.22
                 doc_runs = sum(1 for r in audit_rows if r.get("estimated_tokens"))
                 naive_cost = max(doc_runs * 0.00620, (total_tokens / 1650.0) * 0.00620)
                 saved_usd = max(0.0, naive_cost - total_cost)
                 recent = []
                 for r in reversed(audit_rows[-8:]):
+                    r_tok = int(r.get("estimated_tokens", 0) or 0)
+                    r_cost = float(r.get("estimated_cost_usd", 0.0) or 0.0)
+                    eff_cost = r_cost if r_cost > 0 else (r_tok / 1_000_000.0) * 0.22
+                    ts_raw = str(r.get("timestamp_utc") or r.get("timestamp") or "")
+                    lbl_raw = str(r.get("source_file") or r.get("document_name") or r.get("event_type") or "pipeline_event")
+                    tkt_raw = str(r.get("ticket_id") or f"{int(r.get('stories_generated', r.get('story_count', 0)) or 0)} stories")
                     recent.append({
-                        "timestamp": str(r.get("timestamp", ""))[:19].replace("T", " "),
-                        "label": str(r.get("document_name") or r.get("event_type") or "pipeline_event"),
-                        "ticket": str(r.get("ticket_id") or f"{r.get('story_count', 0)} stories"),
-                        "tokens": int(r.get("estimated_tokens", 0) or 0),
-                        "cost": float(r.get("estimated_cost_usd", 0.0) or 0.0),
+                        "timestamp": ts_raw[:19].replace("T", " ") or "-",
+                        "label": lbl_raw,
+                        "ticket": tkt_raw,
+                        "tokens": r_tok,
+                        "cost": round(eff_cost, 6),
                     })
                 self._send_json(200, {
                     "total_events": len(audit_rows),
