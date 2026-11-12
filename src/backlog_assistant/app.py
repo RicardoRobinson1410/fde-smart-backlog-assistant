@@ -4655,8 +4655,11 @@ def _discover_projects() -> dict[str, str]:
     return projects
 
 
-def _render_active_project_bar() -> str:
-    """Global FDE multi-tenant project bar shown at the top of every tab."""
+def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
+    """Tab 8: Project Selector, Active Project Settings & Isolation Info, and Create New Project."""
+    st.markdown("### ⚙️ Project & Settings")
+    st.caption("Select the active project, adjust essential AI & privacy settings, or create a new isolated project workspace.")
+
     projects = _discover_projects()
     labels = list(projects.keys())
     paths = list(projects.values())
@@ -4668,11 +4671,12 @@ def _render_active_project_bar() -> str:
     active_path = st.session_state["active_project_path"]
     default_idx = paths.index(active_path) if active_path in paths else 0
 
-    with st.container(border=True):
-        c_sel, c_meta = st.columns([1.4, 2.6])
-        with c_sel:
+    col_switch, col_create = st.columns([1.2, 1.0])
+    with col_switch:
+        with st.container(border=True):
+            st.markdown("#### 📂 Active Project")
             sel_label = st.selectbox(
-                "📂 Active Project",
+                "Switch Project",
                 labels,
                 index=default_idx,
                 key="global_project_selector",
@@ -4685,37 +4689,7 @@ def _render_active_project_bar() -> str:
                 st.session_state.pop("active_doc_path", None)
                 st.rerun()
 
-        preview_cfg = load_scenario_config(active_path)
-        if preview_cfg.scenario_id != "smart_backlog_assistant" and preview_cfg.paths.audit_log_path == "outputs/audit_trail.jsonl":
-            preview_cfg = preview_cfg.with_overrides({
-                "paths.audit_log_path": f"outputs/projects/{preview_cfg.scenario_id}_audit_trail.jsonl"
-            })
-        n_backlog = len(load_existing_backlog(preview_cfg.paths.baseline_backlog))
-        n_audit = len(load_audit_history(preview_cfg.paths.audit_log_path))
-        pii_badge = "🛡️ PII Shield ON" if preview_cfg.enable_pii_redaction else "⚠️ PII Shield OFF"
-        with c_meta:
-            st.markdown(
-                f"**{preview_cfg.project_title}** &nbsp;·&nbsp; `Domain: {preview_cfg.domain_name}` &nbsp;·&nbsp; "
-                f"`Prefix: {preview_cfg.id_prefix}` &nbsp;·&nbsp; `Model: {preview_cfg.subagent_models.extractor_agent}` &nbsp;·&nbsp; `{pii_badge}`"
-            )
-            st.caption(
-                f"Isolated workspace: **{n_backlog}** backlog item(s) (`{preview_cfg.paths.baseline_backlog}`) • "
-                f"**{n_audit}** audit event(s) (`{preview_cfg.paths.audit_log_path}`). "
-                "To create or configure projects, open **⚙️ 8. Project & Settings**."
-            )
-    return active_path
-
-
-def render_settings_and_custom_upload_tab(active_path: str) -> tuple[ScenarioConfig, bool]:
-    """Tab 8: Active Project Settings & Isolation Info + Create New Project."""
-    st.markdown("### ⚙️ Project & Settings")
-    st.caption("Configure the currently selected project or create a new isolated project workspace.")
-
-    col_switch, col_create = st.columns([1.2, 1.0])
-    with col_switch:
-        with st.container(border=True):
             base_cfg = load_scenario_config(active_path)
-            st.markdown(f"#### 🛠️ Settings — {base_cfg.project_title}")
             has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
             offline = not has_key
             if has_key:
@@ -4819,8 +4793,6 @@ def render_settings_and_custom_upload_tab(active_path: str) -> tuple[ScenarioCon
 def render_portal() -> None:
     st.markdown(CHATGPT_DARK_CSS, unsafe_allow_html=True)
 
-    active_path = _render_active_project_bar()
-
     # Top-level separated tabs — Tab 1 opens directly into the pure ChatGPT "Where should we begin?" view!
     tab_chat, tab_kanban, tab_pipeline, tab_graph, tab_finops, tab_evals, tab_alerts, tab_settings = st.tabs([
         "💬 1. Ask ChatGPT (Conversational Agent)",
@@ -4834,7 +4806,7 @@ def render_portal() -> None:
     ])
 
     with tab_settings:
-        cfg, offline = render_settings_and_custom_upload_tab(active_path)
+        cfg, offline = render_settings_and_custom_upload_tab()
 
     _CHAT_SERVER_STATE["cfg"] = cfg
     history = ensure_initial_telemetry(cfg)
