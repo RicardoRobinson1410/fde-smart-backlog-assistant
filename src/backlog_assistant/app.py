@@ -429,22 +429,10 @@ def render_chatgpt_conversational_first_tab(
         <div class="composer-zone">
           <!-- '+' Popup Menu for Attaching Files -->
           <div class="attach-menu" id="attach-popup">
-            <div style="font-size:11px; font-weight:700; color:#8e8e8e; padding:4px 10px; text-transform:uppercase;">
-              Attach Document (Instant Preview)
-            </div>
             <label class="attach-item">
-              <span>📤 Upload file from computer (.txt, .md)</span>
-              <input type="file" accept=".txt,.md" style="display:none;" onchange="handleCustomFileUpload(event)" />
+              <span>📤 Upload file from computer</span>
+              <input type="file" accept=".txt,.md,.pdf" style="display:none;" onchange="handleCustomFileUpload(event)" />
             </label>
-            <div class="attach-item" onclick="attachSampleFile('01_sprint_planning_notes.txt')">
-              📝 01_sprint_planning_notes.txt
-            </div>
-            <div class="attach-item" onclick="attachSampleFile('02_incident_postmortem.md')">
-              🚨 02_incident_postmortem.md
-            </div>
-            <div class="attach-item" onclick="attachSampleFile('03_pci_compliance_spec.pdf')">
-              📕 03_pci_compliance_spec.pdf
-            </div>
           </div>
 
           <!-- Instant Document Preview Drawer (Shown ONLY when a file is attached!) -->
@@ -535,6 +523,12 @@ def render_chatgpt_conversational_first_tab(
           document.getElementById('attach-popup').style.display = 'none';
           const file = ev.target.files[0];
           if (!file) return;
+          if (scenarios[file.name]) {{
+            attachedFile = scenarios[file.name];
+            showInstantPreview(attachedFile);
+            ev.target.value = '';
+            return;
+          }}
           const reader = new FileReader();
           reader.onload = function(e) {{
             const raw = e.target.result || '';
@@ -559,6 +553,7 @@ def render_chatgpt_conversational_first_tab(
               total_cost: '$0.00034'
             }};
             showInstantPreview(attachedFile);
+            ev.target.value = '';
           }};
           reader.readAsText(file);
         }}
