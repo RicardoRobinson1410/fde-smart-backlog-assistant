@@ -246,10 +246,12 @@ def test_task_crud_and_hitl_risk_policy(tmp_path: Path) -> None:
     hitl_sec, _ = _classify_task_action_risk({"op": "move", "id": "FIN-104", "status": "In Progress"}, [])
     assert hitl_del and hitl_p0 and hitl_done and hitl_sec
 
-    # 2. Non-critical P1/P2 create does not block on HITL and persists cleanly
-    hitl_low, _ = _classify_task_action_risk({"op": "create", "title": "Update Docs", "priority": "P2 - Medium"}, [])
-    assert hitl_low is False
-    res_create = _execute_task_action({"op": "create", "title": "Update Docs", "priority": "P2 - Medium"}, cfg)
+    # 2. Task creation also requires HITL approval before persisting; non-critical In Progress move is auto-approved
+    hitl_create, _ = _classify_task_action_risk({"op": "create", "title": "Update Docs", "priority": "P2 - Medium"}, [])
+    assert hitl_create is True
+    hitl_move_low, _ = _classify_task_action_risk({"op": "move", "id": "FIN-101", "status": "In Progress"}, [])
+    assert hitl_move_low is False
+    res_create = _execute_task_action({"op": "create", "title": "Update Docs", "priority": "P2 - Medium"}, cfg, approved_by_human=True)
     assert res_create["ok"] is True
     assert res_create["ticket"]["id"] == "FIN-105"
 
@@ -283,6 +285,17 @@ def test_memory_bank_and_natural_language_task_intent(tmp_path: Path, monkeypatc
     assert create_intent is not None
     assert create_intent["op"] == "create"
     assert "monitoring center" in create_intent["title"].lower()
+
+    # 2b. Generic "create a new task" asks for details; detailed request triggers HITL approval
+    bundle = app_mod.build_all_scenarios_bundle(cfg)
+    bl = [b.model_dump() for b in app_mod.load_existing_backlog(cfg.paths.baseline_backlog)]
+    r_generic = app_mod._answer_with_live_openai_or_analytical_engine("create a new task", [], None, bundle, bl, cfg)
+    assert r_generic["type"] == "conversation"
+    assert "please share the details" in r_generic["replyHtml"].lower()
+    r_detailed = app_mod._answer_with_live_openai_or_analytical_engine(
+        "I need a new task for creating a monitoring center", [], None, bundle, bl, cfg
+    )
+    assert r_detailed["type"] == "hitl_action"
 
     # 3. Memory bank persists decisions and recent turns
     app_mod.update_memory_bank(

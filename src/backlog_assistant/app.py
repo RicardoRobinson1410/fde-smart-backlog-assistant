@@ -342,6 +342,8 @@ def _classify_task_action_risk(action: dict[str, Any], backlog: list[dict[str, A
         return True, f"Destructive Action: Permanent deletion of ticket {target_id or 'task'} requires explicit Human-in-the-Loop (HITL) approval."
     if "P0" in new_priority or (existing and "P0" in str(existing.get("priority", ""))):
         return True, f"Critical P0 Blast Radius: Modifying or creating a P0 - Critical ticket ({target_id or 'NEW'}) requires HITL sign-off."
+    if op == "create":
+        return True, f"Backlog Creation Gate: Creating a new backlog ticket ('{action.get('title', 'NEW-TASK')}') requires explicit Human-in-the-Loop (HITL) approval before persisting."
     if new_status.lower() in {"done", "in review / hitl", "closed"}:
         return True, f"Governance Gate: Transitioning {target_id} to '{new_status}' requires Human-in-the-Loop verification."
     if target_id in {"FIN-104", "FIN-106"}:
@@ -572,6 +574,33 @@ def _answer_with_live_openai_or_analytical_engine(
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     task_action = _detect_task_action_intent(q, backlog, api_key)
     if task_action:
+        if str(task_action.get("op", "")).lower() == "create":
+            raw_title = str(task_action.get("title", "")).strip()
+            norm_title = re.sub(r"[^a-z0-9\s]", "", raw_title.lower()).strip()
+            generic_titles = {
+                "", "task", "new task", "a new task", "create task", "create new task",
+                "create a new task", "add task", "add a task", "add a new task",
+                "make a task", "make a new task", "new engineering task", "story", "new story", "user story",
+            }
+            if norm_title in generic_titles or len(norm_title.split()) < 2:
+                steps.append(
+                    {
+                        "title": "📝 Clarification Needed — Gathering Task Details Before Creation",
+                        "detail": "Detected task creation intent without specific title/scope. Prompting user for details before HITL approval.",
+                    }
+                )
+                clarify_md = (
+                    "Sure! Before I propose the new task for your **Human-in-the-Loop (HITL) approval**, please share the details:\n\n"
+                    "- **Title / Objective:** What should this task accomplish?\n"
+                    "- **Priority:** `P0 - Critical`, `P1 - High` (default), `P2 - Medium`, or `P3 - Low`\n"
+                    "- **Category & Summary (optional):** e.g. `Reliability`, `Security`, `Payments`, plus any acceptance criteria.\n\n"
+                    "*Example:* `Create a task for building a real-time monitoring center with P1 priority in Reliability`"
+                )
+                return {
+                    "type": "conversation",
+                    "steps": steps,
+                    "replyHtml": _markdown_to_clean_html(clarify_md),
+                }
         requires_hitl, risk_reason = _classify_task_action_risk(task_action, backlog)
         op_upper = str(task_action.get("op", "")).upper()
         t_id = str(task_action.get("id") or "NEW-TASK")
