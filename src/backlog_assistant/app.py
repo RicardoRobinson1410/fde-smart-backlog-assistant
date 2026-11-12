@@ -4793,15 +4793,40 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
 def render_portal() -> None:
     st.markdown(CHATGPT_DARK_CSS, unsafe_allow_html=True)
 
+    projects = _discover_projects()
+    paths = list(projects.values())
+    default_path = paths[0] if paths else "config/scenario_config.json"
+    active_path = st.session_state.get("active_project_path", default_path)
+    if active_path not in paths:
+        active_path = default_path
+    top_cfg = load_scenario_config(active_path)
+    proj_icon = (
+        "🏦"
+        if top_cfg.scenario_id == "smart_backlog_assistant"
+        else ("🚨" if top_cfg.scenario_id == "incident_remediation_triage" else "📁")
+    )
+    st.markdown(
+        f"""
+        <div style="display:flex; align-items:center; gap:8px; margin: -6px 0 8px 0;">
+            <span style="display:inline-flex; align-items:center; gap:7px; background:#18181b; border:1px solid #2e2e34; border-radius:999px; padding:4px 12px; font-size:12.5px; font-weight:600; color:#f1f5f9;">
+                <span>{proj_icon}</span>
+                <span>{html.escape(top_cfg.project_title)}</span>
+                <span style="background:#27272a; color:#93c5fd; padding:1px 7px; border-radius:999px; font-size:11px; font-family:monospace;">{html.escape(top_cfg.id_prefix)}</span>
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # Top-level separated tabs — Tab 1 opens directly into the pure ChatGPT "Where should we begin?" view!
-    tab_chat, tab_kanban, tab_pipeline, tab_graph, tab_finops, tab_evals, tab_alerts, tab_settings = st.tabs([
+    tab_chat, tab_kanban, tab_pipeline, tab_finops, tab_evals, tab_alerts, tab_graph, tab_settings = st.tabs([
         "💬 1. Ask ChatGPT (Conversational Agent)",
         "📋 2. Kanban Board (Click Cards)",
         "📥 3. Doc-to-Tasks Pipeline",
-        "🕸️ 4. Agent & MCP Graph",
-        "💰 5. FinOps & Cost Savings",
-        "🧪 6. Agent Evaluation Lab",
-        "🚨 7. Error & Log Explorer",
+        "💰 4. FinOps & Cost Savings",
+        "🧪 5. Agent Evaluation Lab",
+        "🚨 6. Error & Log Explorer",
+        "🕸️ 7. Agent & MCP Graph",
         "⚙️ 8. Project & Settings",
     ])
 
