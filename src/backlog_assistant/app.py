@@ -3280,14 +3280,23 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 unsafe_allow_html=True,
             )
 
-    st.markdown("#### 🛡️ FinOps Circuit Breakers & Monthly Volume Simulator")
+    st.markdown("#### 🛡️ FinOps Circuit Breakers & Realistic Volume Simulator")
     calc_col, chart_col = st.columns([1.25, 1.75])
+
+    avg_tok = max(800, int(latest.metadata.estimated_tokens or 1650))
+    avg_in = int(avg_tok * 0.82)
+    avg_out = avg_tok - avg_in
 
     with calc_col:
         vol = st.slider("📄 Monthly Document Volume:", min_value=100, max_value=50000, value=5000, step=500)
+        esc_pct = st.slider("🛡️ Stage 4 Security Gate Escalation (% hitting gpt-4o):", min_value=0, max_value=100, value=15, step=5)
         budget_cap = st.slider("🚨 Monthly Hard Circuit-Breaker Cap ($ USD):", min_value=5.0, max_value=200.0, value=25.0, step=5.0)
-        naive_per_doc = 0.00620
-        tiered_per_doc = 0.00036
+        naive_per_doc = (avg_in * 2.50 + avg_out * 10.00) / 1_000_000.0
+        mini_per_doc = (avg_in * 0.15 + avg_out * 0.60) / 1_000_000.0
+        sec_gate_per_hit = (250 * 2.50 + 80 * 10.00) / 1_000_000.0
+        tiered_per_doc = mini_per_doc + (esc_pct / 100.0) * sec_gate_per_hit
+        savings_pct = round(max(0.0, (1.0 - tiered_per_doc / max(1e-9, naive_per_doc)) * 100.0), 1)
+        bar_pct = max(2, min(100, round(100.0 - savings_pct)))
 
         naive_monthly = round(vol * naive_per_doc, 2)
         tiered_monthly = round(vol * tiered_per_doc, 2)
@@ -3302,19 +3311,19 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         )
 
         st.markdown(
-            f"""
+            "\n".join(line.strip() for line in f"""
             <div style="background:#141414; border-radius:14px; padding:16px; border:1px solid #2a2a2a;">
-                <div style="font-weight:700; font-size:0.94rem; margin-bottom:8px;">🧾 Unit Economics ({vol:,} docs/mo × ~1,650 tokens/doc)</div>
+                <div style="font-weight:700; font-size:0.94rem; margin-bottom:8px;">🧾 Unit Economics ({vol:,} docs/mo × ~{avg_tok:,} tokens/doc • {esc_pct}% gpt-4o gate)</div>
                 <div style="font-size:0.84rem; line-height:1.7; color:#cbd5e1;">
                     • <strong>Naive Single-Model (100% gpt-4o):</strong> <code>${naive_per_doc:.5f}/doc</code> × {vol:,} = <strong style="color:#f43f5e;">${naive_monthly:,.2f} / month</strong><br>
                     • <strong>Our Tiered Subagent Router:</strong> <code>${tiered_per_doc:.5f}/doc</code> × {vol:,} = <strong style="color:#10a37f;">${tiered_monthly:,.2f} / month</strong><br>
                     • <strong>Cost per Extracted User Story:</strong> <code>${cost_per_ticket:.5f} / ticket</code><br>
-                    • <strong>Monthly Net Savings:</strong> <strong style="color:#10a37f;">${monthly_saved:,.2f} saved / mo (94.2% reduction)</strong><br>
+                    • <strong>Monthly Net Savings:</strong> <strong style="color:#10a37f;">${monthly_saved:,.2f} saved / mo ({savings_pct:.1f}% reduction)</strong><br>
                     • <strong>Projected Annual Savings:</strong> <strong style="color:#93c5fd;">${annual_saved:,.2f} saved / year</strong><br>
                     • <strong>Circuit Breaker ({budget_pct}% of ${budget_cap:.0f}):</strong> <code>{breaker_status}</code>
                 </div>
             </div>
-            """,
+            """.splitlines()),
             unsafe_allow_html=True,
         )
 
@@ -3330,7 +3339,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 <div style="font-weight:700; font-size:0.94rem; color:#ffffff;">📊 Cost Comparison: Naive All-gpt-4o vs. Tiered Router</div>
                 <div style="font-size:0.78rem; color:#cbd5e1;">
                     <span style="color:#f43f5e; font-weight:700;">■ Naive All-gpt-4o</span> &nbsp;&nbsp;
-                    <span style="color:#10a37f; font-weight:700;">■ Our Tiered Router (94.2% Saved)</span>
+                    <span style="color:#10a37f; font-weight:700;">■ Our Tiered Router ({savings_pct:.1f}% Saved)</span>
                 </div>
             </div>
             <div style="margin-bottom:14px;">
@@ -3339,7 +3348,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                     <span><strong style="color:#f43f5e;">${naive_1k:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_1k:,.2f}</strong></span>
                 </div>
                 <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:6%; height:100%;"></div></div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:{bar_pct}%; height:100%;"></div></div>
             </div>
             <div style="margin-bottom:14px;">
                 <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
@@ -3347,7 +3356,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                     <span><strong style="color:#f43f5e;">${naive_monthly:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_monthly:,.2f}</strong></span>
                 </div>
                 <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:6%; height:100%;"></div></div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:{bar_pct}%; height:100%;"></div></div>
             </div>
             <div>
                 <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
@@ -3355,7 +3364,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                     <span><strong style="color:#f43f5e;">${naive_yr:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_yr:,.2f}</strong></span>
                 </div>
                 <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:6%; height:100%;"></div></div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:{bar_pct}%; height:100%;"></div></div>
             </div>
         </div>
         """.splitlines())
