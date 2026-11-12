@@ -79,8 +79,11 @@ Every domain variable is controlled via [`config/scenario_config.json`](config/s
 - Python 3.10+
 - *(Optional)* `OPENAI_API_KEY` set in `.env` or environment. **Note for Reviewers**: If `OPENAI_API_KEY` is omitted (or `--offline` is passed), the engine automatically runs in **Deterministic Offline Replay Mode** so all commands, UI features, and tests work out-of-the-box with zero API setup.
 
-### Installation
+### Installation & Environment Activation (Windows PowerShell)
 ```powershell
+# Activate the pre-configured project virtual environment (bypasses Windows Store python stub)
+.\.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 pip install -e .
 python scripts/generate_sample_pdf.py
@@ -113,12 +116,12 @@ python -m backlog_assistant.cli analyze data/samples/01_sprint_planning_notes.tx
 python -m backlog_assistant.cli evaluate
 
 # Run the automated pytest verification suite
-pytest -v
+python -m pytest -v
 ```
 
 ### Launch Interactive Streamlit Workbench
 ```powershell
-streamlit run src/backlog_assistant/app.py
+python -m streamlit run src/backlog_assistant/app.py
 ```
 
 ---

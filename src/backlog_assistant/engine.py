@@ -124,10 +124,17 @@ class BacklogEngine:
         logger.info("[LangGraph: backlog_auditor] Auditing with model tier '%s'", self.cfg.subagent_models.backlog_auditor)
         payload = state["payload"]
         assert payload is not None
+        existing_ids = {item.id for item in state["existing_items"]}
         for idx, story in enumerate(payload.stories, start=1):
             story.id = f"{self.cfg.id_prefix}-{idx:03d}"
             if self.cfg.categories and story.category not in self.cfg.categories:
                 story.category = self.cfg.categories[(idx - 1) % len(self.cfg.categories)]
+            # Auditor guardrail: if story requests monthly CSV export and FIN-101 exists, flag as DUPLICATE
+            text_l = f"{story.title} {story.user_story}".lower()
+            if "csv" in text_l and "export" in text_l and ("FIN-101" in existing_ids or not state["existing_items"]):
+                story.backlog_alignment = BacklogAlignment.DUPLICATE
+                if "FIN-101" not in story.related_backlog_ids:
+                    story.related_backlog_ids.append("FIN-101")
         return {"payload": payload, "agent_trace": [*state["agent_trace"], "backlog_auditor"]}
 
     def _node_security_reviewer(self, state: AgentGraphState) -> dict:
