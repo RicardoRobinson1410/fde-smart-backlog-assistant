@@ -46,11 +46,6 @@
     "baseline_backlog": "data/existing_backlog.json",
     "samples_dir": "data/samples",
     "expected_outputs_dir": "data/expected_outputs"
-  },
-  "github": {
-    "enabled": false,
-    "repo": "RicardoRobinson1410/fde-smart-backlog-assistant",
-    "issue_labels": ["fde-generated", "backlog-assistant"]
   }
 }
 

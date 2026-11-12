@@ -31,7 +31,6 @@ class AgentGraphState(TypedDict):
     """Typed state passed across LangGraph agent nodes."""
     doc_path: Path
     backlog_path: str | Path | None
-    github_repo: str | None
     doc_text: str
     document_sha256: str
     pii_redacted_count: int
@@ -73,13 +72,12 @@ class BacklogEngine:
         """Return the Mermaid diagram representation of the compiled LangGraph StateGraph."""
         return self.workflow.get_graph().draw_mermaid()
 
-    def analyze(self, document_path: str | Path, backlog_path: str | Path | None = None, github_repo: str | None = None) -> BacklogAnalysisResult:
+    def analyze(self, document_path: str | Path, backlog_path: str | Path | None = None) -> BacklogAnalysisResult:
         """Execute the LangGraph StateGraph pipeline and return a validated BacklogAnalysisResult."""
         start_ts = time.perf_counter()
         initial_state: AgentGraphState = {
             "doc_path": Path(document_path),
             "backlog_path": backlog_path if backlog_path is not None else self.cfg.paths.baseline_backlog,
-            "github_repo": github_repo or (self.cfg.github.repo if self.cfg.github.enabled else None),
             "doc_text": "",
             "document_sha256": "",
             "pii_redacted_count": 0,
@@ -124,7 +122,7 @@ class BacklogEngine:
         doc_text, pii_count = redact_pii_and_secrets(raw_text) if self.cfg.enable_pii_redaction else (raw_text, 0)
         if pii_count > 0:
             logger.info("[LangGraph: ingest_node] Redacted %d PII/secret token(s) before LLM processing.", pii_count)
-        existing = load_existing_backlog(state["backlog_path"], github_repo=state["github_repo"])
+        existing = load_existing_backlog(state["backlog_path"])
         return {
             "doc_text": doc_text,
             "document_sha256": doc_sha256,

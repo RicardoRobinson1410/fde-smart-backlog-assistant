@@ -37,7 +37,6 @@ from backlog_assistant.config import ScenarioConfig, load_scenario_config
 from backlog_assistant.engine import BacklogEngine
 from backlog_assistant.models import BacklogAlignment, BacklogAnalysisResult
 from backlog_assistant.parser import (
-    export_stories_to_github,
     extract_document_text,
     load_existing_backlog,
     redact_pii_and_secrets,
@@ -1481,9 +1480,9 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             "user_story": f"Existing Baseline Backlog Ticket ({b.id}) — Current Status: {b.status}",
             "technical_description": b.summary,
             "priority_rationale": f"Baseline ticket with priority {b.priority}.",
-            "alignment_notes": "Loaded via fde-backlog-stdio / fde-github-remote MCP server.",
+            "alignment_notes": "Loaded via fde-backlog-stdio MCP server.",
             "acceptance_criteria": [
-                f"Tracked in data/backlog/existing_backlog.json and GitHub Issues ({b.id}).",
+                f"Tracked in data/backlog/existing_backlog.json ({b.id}).",
                 "Used by Subagent 3 (backlog-auditor) as ground-truth deduplication anchor.",
                 f"Current status: {b.status}.",
             ],
@@ -2175,11 +2174,11 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
         },
         {
             "node_idx": 3,
-            "wire_ids": ["w2", "w3", "w6"],
+            "wire_ids": ["w2", "w3"],
             "agent": f"🔍 Subagent 3: backlog-auditor ({aud_model})",
             "badge": "DEDUPLICATION • $0.00006",
             "badge_color": "#4285f4",
-            "thought": "Cross-referenced extracted stories against FIN-101..FIN-106 via fde-github-remote MCP.",
+            "thought": "Cross-referenced extracted stories against FIN-101..FIN-106 via fde-backlog-stdio MCP.",
             "action": "Classified stories as NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT.",
             "delta": "Attached related_backlog_ids and alignment_notes to every story.",
         },
@@ -2272,9 +2271,6 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           <path id="w5" class="wire" d="M 375 118 L 445 218" stroke="#4285f4" marker-start="url(#ar-c)" marker-end="url(#ar-c)" />
           <text x="435" y="172" fill="#8ab4f8" font-size="9.5" font-weight="700">⇄ stdio MCP</text>
 
-          <path id="w6" class="wire" d="M 820 118 L 715 218" stroke="#4285f4" marker-start="url(#ar-c)" marker-end="url(#ar-c)" />
-          <text x="795" y="172" fill="#8ab4f8" font-size="9.5" font-weight="700">⇄ GitHub PAT</text>
-
           <path id="w7" class="wire" d="M 1065 118 L 1015 218" stroke="#10a37f" marker-end="url(#ar-g)" />
           <text x="1065" y="172" fill="#6ee7b7" font-size="9.5" font-weight="700">⟶ Kanban &amp; JSONL</text>
 
@@ -2330,13 +2326,6 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
             <text x="327" y="242" fill="#8ab4f8" font-size="9.5" font-weight="700">STDIO MCP SERVER</text>
             <text x="327" y="264" fill="#fff" font-size="12" font-weight="700">🔌 fde-backlog-stdio</text>
             <text x="327" y="284" fill="#9aa0a6" font-size="10">Loads existing_backlog.json</text>
-          </g>
-
-          <g class="node-box" onclick="selectStep(3)">
-            <rect class="card" x="590" y="220" width="245" height="92" rx="11" fill="#0d0d0d" stroke="#4285f4" stroke-width="2"/>
-            <text x="602" y="242" fill="#8ab4f8" font-size="9.5" font-weight="700">REMOTE HTTP MCP + PAT</text>
-            <text x="602" y="264" fill="#fff" font-size="12" font-weight="700">🐙 fde-github-remote</text>
-            <text x="602" y="284" fill="#9aa0a6" font-size="10">Syncs GitHub Issues (#1..#7)</text>
           </g>
 
           <g class="node-box" onclick="selectStep(4)">
@@ -2743,7 +2732,7 @@ def build_unified_events(
                     "agent_node": f"Subagent 4: security-reviewer ({cfg.subagent_models.security_reviewer})",
                     "sha256": res_obj.metadata.document_sha256,
                     "remediation": (
-                        f"1. Do NOT auto-export {s.id} to GitHub Issues.\n"
+                        f"1. Do NOT auto-promote {s.id} to active sprint backlog.\n"
                         f"2. Schedule Security Architecture review to supersede {', '.join(s.related_backlog_ids)} (3DES -> AES-256-GCM).\n"
                         f"3. Approve in HITL Gate once migration window is confirmed."
                     ),
@@ -2762,7 +2751,7 @@ def build_unified_events(
                     "agent_node": f"Subagent 3: backlog-auditor ({cfg.subagent_models.backlog_auditor})",
                     "sha256": res_obj.metadata.document_sha256,
                     "remediation": (
-                        f"1. Automatically blocked from creating a duplicate GitHub Issue.\n"
+                        f"1. Automatically blocked from creating a duplicate backlog ticket.\n"
                         f"2. Link stakeholder notes directly to existing ticket {', '.join(s.related_backlog_ids)}."
                     ),
                     "payload": s.model_dump(),
@@ -2972,14 +2961,14 @@ def render_searchable_error_and_log_portal(
             st.json(ev["payload"], expanded=False)
 
 
-def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool, bool]:
+def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
     """Tab 7: Clean Configuration, Live OpenAI API Toggle & Custom Document Upload Tab."""
-    st.markdown("### ⚙️ Pipeline Settings, Custom Document Upload & Live GitHub Export")
+    st.markdown("### ⚙️ Pipeline Settings & Custom Document Upload")
     presets = {
         "🏦 FinTech Backlog (STORY-001)": "config/scenario_config.json",
         "🚨 SRE Outage Triage (REM-001)": "config/presets/incident_triage_scenario.json",
     }
-    c1, c2, c3, c4 = st.columns([2.2, 2.2, 1.5, 1.5])
+    c1, c2, c3 = st.columns([2.4, 2.4, 1.8])
     with c1:
         choice = st.selectbox("✨ Scenario Persona Preset:", list(presets.keys()))
     base_cfg = load_scenario_config(presets[choice])
@@ -2994,9 +2983,6 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool, bool]
     with c3:
         st.write("")
         pii_guard = st.toggle("🛡️ Pre-LLM PII Shield", value=True)
-    with c4:
-        st.write("")
-        use_live_gh = st.toggle("🐙 GitHub Issues Sync", value=False)
 
     o1, o2, o3, o4, o5 = st.columns(5)
     domain_name = o1.text_input("Industry Domain", value=base_cfg.domain_name)
@@ -3035,12 +3021,11 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool, bool]
         engine = BacklogEngine(config=cfg, force_offline=offline)
         st.session_state["latest_result"] = engine.analyze(
             target_doc,
-            backlog_path="" if use_live_gh else cfg.paths.baseline_backlog,
-            github_repo=cfg.github.repo if use_live_gh else None,
+            backlog_path=cfg.paths.baseline_backlog,
         )
         st.success(f"Executed pipeline on `{target_doc.name}`!")
 
-    return cfg, offline, use_live_gh
+    return cfg, offline
 
 
 def render_portal() -> None:
@@ -3061,7 +3046,7 @@ def render_portal() -> None:
     ])
 
     with tab_settings:
-        cfg, offline, use_live_gh = render_settings_and_custom_upload_tab()
+        cfg, offline = render_settings_and_custom_upload_tab()
 
     latest: BacklogAnalysisResult = st.session_state["latest_result"]
     history = load_audit_history(cfg.paths.audit_log_path)

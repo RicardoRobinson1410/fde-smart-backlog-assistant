@@ -1,10 +1,10 @@
-"""Document ingestion (.txt, .md, .pdf) and GitHub PAT REST API / JSON backlog integration."""
+"""Document ingestion (.txt, .md, .pdf), PII redaction, and local JSON backlog integration."""
 
 from __future__ import annotations
-import json, logging, os, re, subprocess, urllib.error, urllib.request
+import json, logging, re
 from pathlib import Path
 from pypdf import PdfReader
-from backlog_assistant.models import BacklogAlignment, ExistingBacklogItem, GeneratedUserStory
+from backlog_assistant.models import ExistingBacklogItem
 
 logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
@@ -24,57 +24,6 @@ def redact_pii_and_secrets(text: str) -> tuple[str, int]:
         sanitized, count = pattern.subn(replacement, sanitized)
         redacted_count += count
     return sanitized, redacted_count
-
-
-_CACHED_PAT: str | None = None
-
-
-def _resolve_gh_cli_token() -> str:
-    """Resolve active token from `gh auth token` CLI."""
-    global _CACHED_PAT
-    if _CACHED_PAT is not None:
-        return _CACHED_PAT
-    try:
-        proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=15, check=True)
-        _CACHED_PAT = proc.stdout.strip()
-        return _CACHED_PAT
-    except Exception:
-        return ""
-
-
-def _resolve_github_pat() -> str:
-    """Resolve GitHub Personal Access Token from GITHUB_PAT, GITHUB_TOKEN, or `gh auth token`."""
-    token = (os.getenv("GITHUB_PAT") or os.getenv("GITHUB_TOKEN") or "").strip()
-    return token or _resolve_gh_cli_token()
-
-
-def _github_api_request(url: str, token: str, method: str = "GET", payload: dict | None = None) -> list | dict:
-    """Execute an authenticated GitHub REST API v3 request with automatic fallback to `gh auth token` on 401."""
-    def _do_req(tok: str) -> list | dict:
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "FDE-Smart-Backlog-Assistant/1.0",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-        if tok:
-            headers["Authorization"] = f"Bearer {tok}"
-        data = json.dumps(payload).encode("utf-8") if payload is not None else None
-        if data is not None:
-            headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-    try:
-        return _do_req(token)
-    except urllib.error.HTTPError as err:
-        if err.code == 401:
-            fallback_tok = _resolve_gh_cli_token()
-            if fallback_tok and fallback_tok != token:
-                return _do_req(fallback_tok)
-            if method == "GET":
-                return _do_req("")
-        raise
 
 
 def extract_document_text(file_path: str | Path) -> str:
@@ -98,8 +47,8 @@ def extract_document_text(file_path: str | Path) -> str:
     return cleaned
 
 
-def load_existing_backlog(backlog_path: str | Path | None = None, github_repo: str | None = None) -> list[ExistingBacklogItem]:
-    """Load baseline backlog items from local JSON and/or live GitHub Issues via GitHub PAT REST API."""
+def load_existing_backlog(backlog_path: str | Path | None = None) -> list[ExistingBacklogItem]:
+    """Load baseline backlog items from local JSON."""
     items: list[ExistingBacklogItem] = []
     if backlog_path:
         path = Path(backlog_path)
@@ -107,56 +56,4 @@ def load_existing_backlog(backlog_path: str | Path | None = None, github_repo: s
             raise FileNotFoundError(f"Existing backlog JSON file not found: {path}")
         raw_list = json.loads(path.read_text(encoding="utf-8"))
         items.extend(ExistingBacklogItem.model_validate(entry) for entry in raw_list)
-
-    if github_repo:
-        try:
-            token = _resolve_github_pat()
-            url = f"https://api.github.com/repos/{github_repo}/issues?state=open&per_page=30"
-            gh_issues = _github_api_request(url, token=token, method="GET")
-            if isinstance(gh_issues, list):
-                for issue in gh_issues:
-                    if "pull_request" in issue:
-                        continue
-                    labels = [lbl.get("name", "") for lbl in issue.get("labels", []) if isinstance(lbl, dict)]
-                    title = issue.get("title", "")
-                    # Preserve [FIN-101] style IDs if present in the GitHub issue title
-                    item_id = title.split("]")[0].lstrip("[") if title.startswith("[") and "]" in title else f"GH-{issue['number']}"
-                    items.append(ExistingBacklogItem(
-                        id=item_id, title=title, status=issue.get("state", "open").capitalize(),
-                        priority=next((l for l in labels if l.startswith("P")), "P2 - Medium"),
-                        category=next((l for l in labels if not l.startswith("P")), "Feature"),
-                        summary=(issue.get("body") or "")[:300],
-                    ))
-            logger.info("Loaded %d live backlog issues from GitHub repo '%s' via PAT.", len(items), github_repo)
-        except Exception as exc:
-            logger.warning("GitHub PAT backlog sync skipped for '%s': %s", github_repo, exc)
     return items
-
-
-def export_stories_to_github(stories: list[GeneratedUserStory], repo: str, labels: list[str] | None = None, dry_run: bool = True) -> list[str]:
-    """Create GitHub Issues for NEW stories idempotently via GitHub PAT REST API."""
-    results: list[str] = []
-    token = _resolve_github_pat()
-    url = f"https://api.github.com/repos/{repo}/issues"
-    existing_ids = {item.id for item in load_existing_backlog(backlog_path=None, github_repo=repo)} if not dry_run else set()
-
-    for s in [st for st in stories if st.backlog_alignment == BacklogAlignment.NEW]:
-        title = f"[{s.id}] {s.title}"
-        if not dry_run and s.id in existing_ids:
-            results.append(f"[SKIP-IDEMPOTENT] '{title}' already exists in {repo}")
-            continue
-        hitl_note = "\n> **HUMAN-IN-THE-LOOP GATE:** Flagged for tech-lead approval (`requires_human_approval=True`).\n" if s.requires_human_approval else ""
-        body = (
-            f"**User Story:** {s.user_story}\n{hitl_note}\n"
-            f"**Priority:** `{s.priority}` ({s.priority_rationale})\n"
-            f"**Category:** `{s.category}` | **Story Points:** `{s.story_points}` | **Confidence:** `{s.confidence_score:.2f}`\n"
-            f"**Alignment:** `{s.backlog_alignment.value}` — {s.alignment_notes}\n\n"
-            f"### Technical Description\n{s.technical_description}\n\n"
-            f"### Acceptance Criteria\n" + "\n".join(f"- [ ] {ac}" for ac in s.acceptance_criteria)
-        )
-        if dry_run:
-            results.append(f"[DRY-RUN] POST {url} -> '{title}' (HITL={s.requires_human_approval})")
-        else:
-            created = _github_api_request(url, token=token, method="POST", payload={"title": title, "body": body, "labels": labels or []})
-            results.append(str(created.get("html_url", title)) if isinstance(created, dict) else title)
-    return results

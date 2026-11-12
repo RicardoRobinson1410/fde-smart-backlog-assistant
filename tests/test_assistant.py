@@ -29,11 +29,9 @@ def test_scenario_config_and_dynamic_variable_overrides() -> None:
         "domain_name": "Healthcare Claims & HIPAA Engineering",
         "id_prefix": "HIPAA",
         "output_item_label": "Compliance Task",
-        "github.repo": "RicardoRobinson1410/custom-repo",
     })
     assert adapted_cfg.domain_name == "Healthcare Claims & HIPAA Engineering"
     assert adapted_cfg.id_prefix == "HIPAA"
-    assert adapted_cfg.github.repo == "RicardoRobinson1410/custom-repo"
 
     # Prompt must dynamically incorporate the overridden variables
     sys_prompt = build_system_prompt(adapted_cfg)
@@ -149,28 +147,6 @@ def test_pre_tool_use_hook_contract() -> None:
         check=True,
     )
     assert json.loads(proc_unsafe.stdout)["decision"] == "deny"
-
-
-def test_github_pat_live_backlog_test_case() -> None:
-    """Verify live GitHub PAT backlog ingestion & deduplication against RicardoRobinson1410/fde-smart-backlog-assistant."""
-    from backlog_assistant.parser import _resolve_github_pat
-
-    token = _resolve_github_pat()
-    if not token:
-        pytest.skip("No GitHub PAT configured in environment or gh CLI")
-
-    repo = "RicardoRobinson1410/fde-smart-backlog-assistant"
-    live_items = load_existing_backlog(backlog_path=None, github_repo=repo)
-    assert len(live_items) >= 6
-    live_ids = {item.id for item in live_items}
-    assert {"FIN-101", "FIN-102", "FIN-104"}.issubset(live_ids)
-
-    # Run BacklogEngine using ONLY the live GitHub repository's Issues as the baseline backlog
-    cfg = load_scenario_config().with_overrides({"github.enabled": True, "github.repo": repo})
-    res = BacklogEngine(config=cfg, force_offline=True).analyze("data/samples/01_sprint_planning_notes.txt", backlog_path="", github_repo=repo)
-    assert res.metadata.existing_backlog_count >= 6
-    assert res.metadata.agent_trace == ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"]
-    assert any(s.backlog_alignment == BacklogAlignment.DUPLICATE and "FIN-101" in s.related_backlog_ids for s in res.stories)
 
 
 def test_langgraph_multi_agent_state_graph_and_mermaid() -> None:

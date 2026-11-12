@@ -9,7 +9,6 @@ from rich.panel import Panel
 from rich.table import Table
 from backlog_assistant.config import load_scenario_config
 from backlog_assistant.engine import BacklogEngine
-from backlog_assistant.parser import export_stories_to_github
 
 console = Console()
 
@@ -20,7 +19,7 @@ def _parse_kv(pairs: list[str] | None) -> dict[str, Any]:
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     cfg = load_scenario_config(args.config, overrides=_parse_kv(args.set))
-    result = BacklogEngine(config=cfg, force_offline=args.offline).analyze(args.input, backlog_path=args.backlog, github_repo=args.github_repo)
+    result = BacklogEngine(config=cfg, force_offline=args.offline).analyze(args.input, backlog_path=args.backlog)
     console.print(Panel.fit(
         f"[bold cyan]{cfg.project_title}[/bold cyan] | Domain: [yellow]{cfg.domain_name}[/yellow]\n"
         f"Source: [bold]{result.metadata.source_file}[/bold] (SHA256: `{result.metadata.document_sha256}`) | Mode: [green]{result.metadata.execution_mode}[/green]\n"
@@ -42,9 +41,6 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         stem = Path(args.input).stem
         (out / f"{stem}_result.json").write_text(result.model_dump_json(indent=2), encoding="utf-8")
         (out / f"{stem}_report.md").write_text(result.to_markdown(cfg), encoding="utf-8")
-    if args.export_github:
-        for line in export_stories_to_github(result.stories, repo=args.github_repo or cfg.github.repo, labels=cfg.github.issue_labels, dry_run=not args.live_export):
-            console.print(f"[magenta]{line}[/magenta]")
     return 0
 
 
@@ -74,11 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     p_an = sub.add_parser("analyze", help="Analyze a requirement document (.txt, .md, .pdf)")
     p_an.add_argument("input")
-    for flag in ["--config", "--backlog", "--github-repo"]:
+    for flag in ["--config", "--backlog"]:
         p_an.add_argument(flag)
     p_an.add_argument("--set", action="append", help="Override scenario variable (key=value)")
-    p_an.add_argument("--export-github", action="store_true")
-    p_an.add_argument("--live-export", action="store_true", help="Create real GitHub Issues via PAT instead of dry-run")
     p_an.add_argument("--offline", action="store_true")
     p_an.add_argument("--output-dir", default="outputs")
 

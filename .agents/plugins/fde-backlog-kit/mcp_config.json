@@ -19,20 +19,8 @@
           "name": "OPENAI_MODEL",
           "title": "LLM Model Name",
           "description": "Model identifier (default: gpt-4o-mini)"
-        },
-        {
-          "name": "GITHUB_TOKEN",
-          "title": "GitHub Personal Access Token",
-          "description": "Token for live GitHub Issues backlog sync"
         }
       ]
-    },
-    "fde-github-remote": {
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer ${GITHUB_TOKEN}"
-      },
-      "disabled": true
     }
   }
 }

@@ -18,12 +18,6 @@ class PathsConfig(BaseModel):
     audit_log_path: str = "outputs/audit_trail.jsonl"
 
 
-class GitHubConfig(BaseModel):
-    enabled: bool = False
-    repo: str = "RicardoRobinson1410/fde-smart-backlog-assistant"
-    issue_labels: list[str] = Field(default_factory=lambda: ["fde-generated", "backlog-assistant"])
-
-
 class SubagentModelsConfig(BaseModel):
     """Per-subagent model routing configuration to minimize token costs."""
     extractor_agent: str = "gpt-4o-mini"
@@ -55,7 +49,6 @@ class ScenarioConfig(BaseModel):
     max_input_chars: int = 50000
     enable_pii_redaction: bool = True
     paths: PathsConfig = Field(default_factory=PathsConfig)
-    github: GitHubConfig = Field(default_factory=GitHubConfig)
 
     def with_overrides(self, overrides: dict[str, Any] | None = None) -> ScenarioConfig:
         """Return a new ScenarioConfig with dotted or top-level key overrides applied."""
@@ -81,7 +74,6 @@ def load_scenario_config(config_path: str | Path | None = None, overrides: dict[
         "OPENAI_EXTRACTOR_MODEL": "subagent_models.extractor_agent",
         "OPENAI_AUDITOR_MODEL": "subagent_models.backlog_auditor",
         "OPENAI_SECURITY_MODEL": "subagent_models.security_reviewer",
-        "GITHUB_REPO": "github.repo",
     }
     if config_path is None:
         env_map.update({
