@@ -1566,11 +1566,14 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         .qf-btn.active {{ background: #1C2B41; color: #579DFF; font-weight: 600; }}
 
         /* Jira Board Columns */
+        .jira-board-scroll {{
+          height: 575px; overflow-y: auto; padding-right: 4px;
+        }}
         .jira-board {{
-          display: grid; grid-template-columns: repeat(4, minmax(230px, 1fr)); gap: 12px; align-items: start;
+          display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 12px; align-items: stretch;
         }}
         .jira-col {{
-          background: #161A1D; border-radius: 6px; padding: 8px; min-height: 520px;
+          background: #161A1D; border-radius: 6px; padding: 8px; min-height: 540px;
           transition: background 0.15s;
         }}
         .jira-col.drag-over {{
@@ -1717,34 +1720,36 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         <button class="qf-btn" onclick="clearAllFilters()" style="color:#8C9BAB;">Clear filters</button>
       </div>
 
-      <!-- 4-Column Jira Board with HTML5 Drag & Drop -->
-      <div class="jira-board">
-        <div class="jira-col" data-col="todo" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'todo')">
-          <div class="jira-col-hdr">
-            <span>TO DO <span class="col-count" id="cnt-todo">0</span></span>
+      <!-- 4-Column Jira Board with Smooth Pointer Drag & Drop -->
+      <div class="jira-board-scroll">
+        <div class="jira-board">
+          <div class="jira-col" data-col="todo">
+            <div class="jira-col-hdr">
+              <span>TO DO <span class="col-count" id="cnt-todo">0</span></span>
+            </div>
+            <div id="col-todo"></div>
           </div>
-          <div id="col-todo"></div>
-        </div>
 
-        <div class="jira-col" data-col="prog" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'prog')">
-          <div class="jira-col-hdr">
-            <span>IN PROGRESS <span class="col-count" id="cnt-prog">0</span></span>
+          <div class="jira-col" data-col="prog">
+            <div class="jira-col-hdr">
+              <span>IN PROGRESS <span class="col-count" id="cnt-prog">0</span></span>
+            </div>
+            <div id="col-prog"></div>
           </div>
-          <div id="col-prog"></div>
-        </div>
 
-        <div class="jira-col" data-col="hitl" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'hitl')">
-          <div class="jira-col-hdr">
-            <span>IN REVIEW / HITL <span class="col-count" id="cnt-hitl">0</span></span>
+          <div class="jira-col" data-col="hitl">
+            <div class="jira-col-hdr">
+              <span>IN REVIEW / HITL <span class="col-count" id="cnt-hitl">0</span></span>
+            </div>
+            <div id="col-hitl"></div>
           </div>
-          <div id="col-hitl"></div>
-        </div>
 
-        <div class="jira-col" data-col="done" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'done')">
-          <div class="jira-col-hdr">
-            <span>DONE <span class="col-count" id="cnt-done">0</span></span>
+          <div class="jira-col" data-col="done">
+            <div class="jira-col-hdr">
+              <span>DONE <span class="col-count" id="cnt-done">0</span></span>
+            </div>
+            <div id="col-done"></div>
           </div>
-          <div id="col-done"></div>
         </div>
       </div>
 
@@ -1872,10 +1877,8 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             const refs = (c.related_ids && c.related_ids.length && c.alignment !== 'BASELINE') ? ` • ${{c.related_ids.join(', ')}}` : '';
             cols[c.column] += `
               <div class="jira-card"
-                   draggable="true"
-                   ondragstart="onDragStart(event, '${{c.id}}')"
-                   ondragend="onDragEnd(event)"
-                   onclick="openIssueModal('${{c.id}}')">
+                   style="user-select:none;"
+                   onpointerdown="startCardPointer(event, '${{c.id}}')">
                 <div class="jira-card-title">${{c.title}}</div>
                 <div>
                   <span class="jira-epic ${{epCls}}">${{c.category}}${{refs}}</span>
@@ -1903,34 +1906,80 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
           }});
         }}
 
-        // HTML5 Drag & Drop
-        function onDragStart(ev, cardId) {{
-          draggedCardId = cardId;
-          ev.currentTarget.classList.add('dragging');
-          ev.dataTransfer.setData('text/plain', cardId);
+        // Smooth Pointer-Based Drag & Drop (zero conflict with click-to-open-popup!)
+        let dragState = null;
+
+        function startCardPointer(ev, cardId) {{
+          if (ev.button !== 0) return;
+          const cardEl = ev.currentTarget;
+          const rect = cardEl.getBoundingClientRect();
+          dragState = {{
+            cardId: cardId,
+            cardEl: cardEl,
+            startX: ev.clientX,
+            startY: ev.clientY,
+            offsetX: ev.clientX - rect.left,
+            offsetY: ev.clientY - rect.top,
+            width: rect.width,
+            dragging: false,
+            ghost: null,
+            targetCol: null
+          }};
         }}
-        function onDragEnd(ev) {{
-          ev.currentTarget.classList.remove('dragging');
-          document.querySelectorAll('.jira-col').forEach(col => col.classList.remove('drag-over'));
-        }}
-        function onDragOver(ev) {{
-          ev.preventDefault();
-          ev.currentTarget.classList.add('drag-over');
-        }}
-        function onDragLeave(ev) {{
-          ev.currentTarget.classList.remove('drag-over');
-        }}
-        function onDrop(ev, targetCol) {{
-          ev.preventDefault();
-          ev.currentTarget.classList.remove('drag-over');
-          const id = draggedCardId || ev.dataTransfer.getData('text/plain');
-          const c = cardsData.find(x => x.id === id);
-          if (c) {{
-            c.column = targetCol;
-            renderBoard();
+
+        document.addEventListener('pointermove', function(ev) {{
+          if (!dragState) return;
+          const dx = ev.clientX - dragState.startX;
+          const dy = ev.clientY - dragState.startY;
+          if (!dragState.dragging && Math.hypot(dx, dy) > 6) {{
+            dragState.dragging = true;
+            const ghost = dragState.cardEl.cloneNode(true);
+            ghost.style.position = 'fixed';
+            ghost.style.width = dragState.width + 'px';
+            ghost.style.zIndex = '9999';
+            ghost.style.pointerEvents = 'none';
+            ghost.style.opacity = '0.92';
+            ghost.style.transform = 'rotate(2deg) scale(1.02)';
+            ghost.style.boxShadow = '0 14px 28px rgba(0,0,0,0.55)';
+            ghost.style.borderColor = '#579DFF';
+            document.body.appendChild(ghost);
+            dragState.ghost = ghost;
+            dragState.cardEl.classList.add('dragging');
           }}
-          draggedCardId = null;
-        }}
+          if (dragState.dragging && dragState.ghost) {{
+            dragState.ghost.style.left = (ev.clientX - dragState.offsetX) + 'px';
+            dragState.ghost.style.top = (ev.clientY - dragState.offsetY) + 'px';
+            let foundCol = null;
+            document.querySelectorAll('.jira-col').forEach(col => {{
+              const r = col.getBoundingClientRect();
+              const inside = ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+              col.classList.toggle('drag-over', inside);
+              if (inside) foundCol = col.getAttribute('data-col');
+            }});
+            dragState.targetCol = foundCol;
+          }}
+        }});
+
+        document.addEventListener('pointerup', function(ev) {{
+          if (!dragState) return;
+          const st = dragState;
+          dragState = null;
+          document.querySelectorAll('.jira-col').forEach(col => col.classList.remove('drag-over'));
+          if (st.ghost) st.ghost.remove();
+          if (st.cardEl) st.cardEl.classList.remove('dragging');
+
+          if (st.dragging) {{
+            if (st.targetCol) {{
+              const c = cardsData.find(x => x.id === st.cardId);
+              if (c && c.column !== st.targetCol) {{
+                c.column = st.targetCol;
+                renderBoard();
+              }}
+            }}
+          }} else {{
+            openIssueModal(st.cardId);
+          }}
+        }});
 
         // Jira Issue Detail Modal
         function openIssueModal(cardId) {{
@@ -2084,7 +2133,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     </body>
     </html>
     """
-    components.html(kanban_html, height=680, scrolling=True)
+    components.html(kanban_html, height=740, scrolling=False)
 
 
 def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
