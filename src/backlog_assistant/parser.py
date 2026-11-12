@@ -1,13 +1,29 @@
 """Document ingestion (.txt, .md, .pdf) and GitHub PAT REST API / JSON backlog integration."""
 
 from __future__ import annotations
-import json, logging, os, subprocess, urllib.error, urllib.request
+import json, logging, os, re, subprocess, urllib.error, urllib.request
 from pathlib import Path
 from pypdf import PdfReader
 from backlog_assistant.models import BacklogAlignment, ExistingBacklogItem, GeneratedUserStory
 
 logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
+_PII_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "[REDACTED_EMAIL]"),
+    (re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|ghp_[A-Za-z0-9]{16,})\b"), "[REDACTED_SECRET]"),
+    (re.compile(r"\b(?:\d[ -]*?){13,16}\b"), "[REDACTED_PAN]"),
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[REDACTED_SSN]"),
+]
+
+
+def redact_pii_and_secrets(text: str) -> tuple[str, int]:
+    """Scrub emails, API keys/tokens, PANs, and SSNs prior to external LLM API calls."""
+    redacted_count = 0
+    sanitized = text
+    for pattern, replacement in _PII_PATTERNS:
+        sanitized, count = pattern.subn(replacement, sanitized)
+        redacted_count += count
+    return sanitized, redacted_count
 
 
 _CACHED_PAT: str | None = None
@@ -118,22 +134,28 @@ def load_existing_backlog(backlog_path: str | Path | None = None, github_repo: s
 
 
 def export_stories_to_github(stories: list[GeneratedUserStory], repo: str, labels: list[str] | None = None, dry_run: bool = True) -> list[str]:
-    """Create GitHub Issues for NEW stories via GitHub PAT REST API (or return preview in dry_run mode)."""
+    """Create GitHub Issues for NEW stories idempotently via GitHub PAT REST API."""
     results: list[str] = []
     token = _resolve_github_pat()
     url = f"https://api.github.com/repos/{repo}/issues"
+    existing_ids = {item.id for item in load_existing_backlog(backlog_path=None, github_repo=repo)} if not dry_run else set()
+
     for s in [st for st in stories if st.backlog_alignment == BacklogAlignment.NEW]:
         title = f"[{s.id}] {s.title}"
+        if not dry_run and s.id in existing_ids:
+            results.append(f"[SKIP-IDEMPOTENT] '{title}' already exists in {repo}")
+            continue
+        hitl_note = "\n> **HUMAN-IN-THE-LOOP GATE:** Flagged for tech-lead approval (`requires_human_approval=True`).\n" if s.requires_human_approval else ""
         body = (
-            f"**User Story:** {s.user_story}\n\n"
+            f"**User Story:** {s.user_story}\n{hitl_note}\n"
             f"**Priority:** `{s.priority}` ({s.priority_rationale})\n"
-            f"**Category:** `{s.category}` | **Story Points:** `{s.story_points}`\n"
+            f"**Category:** `{s.category}` | **Story Points:** `{s.story_points}` | **Confidence:** `{s.confidence_score:.2f}`\n"
             f"**Alignment:** `{s.backlog_alignment.value}` — {s.alignment_notes}\n\n"
             f"### Technical Description\n{s.technical_description}\n\n"
             f"### Acceptance Criteria\n" + "\n".join(f"- [ ] {ac}" for ac in s.acceptance_criteria)
         )
         if dry_run:
-            results.append(f"[DRY-RUN] POST {url} -> '{title}'")
+            results.append(f"[DRY-RUN] POST {url} -> '{title}' (HITL={s.requires_human_approval})")
         else:
             created = _github_api_request(url, token=token, method="POST", payload={"title": title, "body": body, "labels": labels or []})
             results.append(str(created.get("html_url", title)) if isinstance(created, dict) else title)

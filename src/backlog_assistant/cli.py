@@ -23,15 +23,17 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     result = BacklogEngine(config=cfg, force_offline=args.offline).analyze(args.input, backlog_path=args.backlog, github_repo=args.github_repo)
     console.print(Panel.fit(
         f"[bold cyan]{cfg.project_title}[/bold cyan] | Domain: [yellow]{cfg.domain_name}[/yellow]\n"
-        f"Source: [bold]{result.metadata.source_file}[/bold] | Mode: [green]{result.metadata.execution_mode}[/green]\n\n"
+        f"Source: [bold]{result.metadata.source_file}[/bold] (SHA256: `{result.metadata.document_sha256}`) | Mode: [green]{result.metadata.execution_mode}[/green]\n"
+        f"PII Redacted: [bold]{result.metadata.pii_redacted_count}[/bold] | Est. Tokens: [bold]{result.metadata.estimated_tokens}[/bold] | Est. Cost: [bold]${result.metadata.estimated_cost_usd:.6f}[/bold]\n\n"
         f"[bold]Summary:[/bold] {result.summary.executive_summary}", title=f"Scenario: {cfg.scenario_id}",
     ))
     table = Table(title=f"Extracted {cfg.output_item_label}s ({len(result.stories)})", show_lines=True)
-    for col in ["ID", "Title & Story", "Priority", "Category", "Alignment / Refs", "Pts / ACs"]:
+    for col in ["ID", "Title & Story", "Priority / HITL", "Category", "Alignment / Refs", "Pts / ACs"]:
         table.add_column(col)
     for s in result.stories:
         refs = f" ({', '.join(s.related_backlog_ids)})" if s.related_backlog_ids else ""
-        table.add_row(s.id, f"[bold]{s.title}[/bold]\n[italic]{s.user_story}[/italic]", s.priority, s.category, f"{s.backlog_alignment.value}{refs}", f"{s.story_points} pts ({len(s.acceptance_criteria)} ACs)")
+        hitl = "\n[bold yellow][HITL Gate][/bold yellow]" if s.requires_human_approval else ""
+        table.add_row(s.id, f"[bold]{s.title}[/bold]\n[italic]{s.user_story}[/italic]", f"{s.priority}{hitl}", s.category, f"{s.backlog_alignment.value}{refs}", f"{s.story_points} pts ({len(s.acceptance_criteria)} ACs)")
     console.print(table)
 
     if args.output_dir:

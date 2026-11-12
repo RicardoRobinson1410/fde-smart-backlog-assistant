@@ -15,6 +15,7 @@ class PathsConfig(BaseModel):
     baseline_backlog: str = "data/existing_backlog.json"
     samples_dir: str = "data/samples"
     expected_outputs_dir: str = "data/expected_outputs"
+    audit_log_path: str = "outputs/audit_trail.jsonl"
 
 
 class GitHubConfig(BaseModel):
@@ -51,6 +52,8 @@ class ScenarioConfig(BaseModel):
     temperature: float = 0.1
     max_retries: int = 2
     timeout_seconds: int = 45
+    max_input_chars: int = 50000
+    enable_pii_redaction: bool = True
     paths: PathsConfig = Field(default_factory=PathsConfig)
     github: GitHubConfig = Field(default_factory=GitHubConfig)
 

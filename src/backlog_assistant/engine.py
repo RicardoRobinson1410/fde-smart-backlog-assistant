@@ -1,7 +1,8 @@
-"""LangGraph + LangChain multi-agent orchestration engine with structured outputs and offline fallback."""
+"""LangGraph + LangChain multi-agent orchestration engine with FDE privacy, FinOps, HITL, and audit guardrails."""
 
 from __future__ import annotations
-import json, logging, os, re, time, warnings
+from datetime import datetime, timezone
+import hashlib, json, logging, os, re, time, warnings
 from pathlib import Path
 from typing import TypedDict
 
@@ -15,10 +16,15 @@ from backlog_assistant.models import (
     BacklogAlignment, BacklogAnalysisResult, ExecutionMetadata, ExistingBacklogItem,
     GeneratedUserStory, LLMExtractionPayload, RequirementSummary,
 )
-from backlog_assistant.parser import extract_document_text, load_existing_backlog
+from backlog_assistant.parser import extract_document_text, load_existing_backlog, redact_pii_and_secrets
 from backlog_assistant.prompts import PROMPT_VERSION, build_system_prompt, build_user_prompt
 
 logger = logging.getLogger(__name__)
+# FinOps pricing table per 1M tokens (input_usd, output_usd)
+_MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+}
 
 
 class AgentGraphState(TypedDict):
@@ -27,6 +33,8 @@ class AgentGraphState(TypedDict):
     backlog_path: str | Path | None
     github_repo: str | None
     doc_text: str
+    document_sha256: str
+    pii_redacted_count: int
     existing_items: list[ExistingBacklogItem]
     payload: LLMExtractionPayload | None
     execution_mode: str
@@ -73,6 +81,8 @@ class BacklogEngine:
             "backlog_path": backlog_path if backlog_path is not None else self.cfg.paths.baseline_backlog,
             "github_repo": github_repo or (self.cfg.github.repo if self.cfg.github.enabled else None),
             "doc_text": "",
+            "document_sha256": "",
+            "pii_redacted_count": 0,
             "existing_items": [],
             "payload": None,
             "execution_mode": "offline_deterministic_replay" if self.offline_mode else "live_langchain_langgraph",
@@ -81,30 +91,47 @@ class BacklogEngine:
         final_state = self.workflow.invoke(initial_state)
         payload: LLMExtractionPayload = final_state["payload"]
         elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
+        est_tokens, est_cost = self._estimate_finops_cost(final_state["doc_text"], payload)
 
-        return BacklogAnalysisResult(
+        result = BacklogAnalysisResult(
             summary=payload.summary,
             stories=payload.stories,
             metadata=ExecutionMetadata(
                 scenario_id=self.cfg.scenario_id,
                 source_file=initial_state["doc_path"].name,
+                document_sha256=final_state["document_sha256"],
                 execution_mode=final_state["execution_mode"],
                 model_name=self.cfg.subagent_models.extractor_agent,
                 prompt_version=PROMPT_VERSION,
                 latency_ms=elapsed_ms,
                 existing_backlog_count=len(final_state["existing_items"]),
+                pii_redacted_count=final_state["pii_redacted_count"],
+                estimated_tokens=est_tokens,
+                estimated_cost_usd=est_cost,
                 agent_trace=final_state["agent_trace"],
                 subagent_models_used=self.cfg.subagent_models.model_dump(),
             ),
         )
+        self._append_audit_trail(result)
+        return result
 
     def _node_ingest(self, state: AgentGraphState) -> dict:
-        """Node 1 (Ingestion Agent): Parse TXT/MD/PDF and load baseline backlog from JSON or GitHub PAT."""
+        """Node 1 (Ingestion Agent): Parse TXT/MD/PDF, compute SHA-256 hash, scrub PII/secrets, and load backlog."""
         doc_path = state["doc_path"]
         logger.info("[LangGraph: ingest_node] Ingesting '%s' (scenario=%s)", doc_path.name, self.cfg.scenario_id)
-        doc_text = extract_document_text(doc_path)
+        raw_text = extract_document_text(doc_path)[: self.cfg.max_input_chars]
+        doc_sha256 = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+        doc_text, pii_count = redact_pii_and_secrets(raw_text) if self.cfg.enable_pii_redaction else (raw_text, 0)
+        if pii_count > 0:
+            logger.info("[LangGraph: ingest_node] Redacted %d PII/secret token(s) before LLM processing.", pii_count)
         existing = load_existing_backlog(state["backlog_path"], github_repo=state["github_repo"])
-        return {"doc_text": doc_text, "existing_items": existing, "agent_trace": [*state["agent_trace"], "ingest_node"]}
+        return {
+            "doc_text": doc_text,
+            "document_sha256": doc_sha256,
+            "pii_redacted_count": pii_count,
+            "existing_items": existing,
+            "agent_trace": [*state["agent_trace"], "ingest_node"],
+        }
 
     def _node_extractor_agent(self, state: AgentGraphState) -> dict:
         """Node 2 (Extractor Agent): Run LangChain ChatPromptTemplate | ChatOpenAI.with_structured_output."""
@@ -129,7 +156,6 @@ class BacklogEngine:
             story.id = f"{self.cfg.id_prefix}-{idx:03d}"
             if self.cfg.categories and story.category not in self.cfg.categories:
                 story.category = self.cfg.categories[(idx - 1) % len(self.cfg.categories)]
-            # Auditor guardrail: if story requests monthly CSV export and FIN-101 exists, flag as DUPLICATE
             text_l = f"{story.title} {story.user_story}".lower()
             if "csv" in text_l and "export" in text_l and ("FIN-101" in existing_ids or not state["existing_items"]):
                 story.backlog_alignment = BacklogAlignment.DUPLICATE
@@ -138,13 +164,43 @@ class BacklogEngine:
         return {"payload": payload, "agent_trace": [*state["agent_trace"], "backlog_auditor"]}
 
     def _node_security_reviewer(self, state: AgentGraphState) -> dict:
-        """Node 4 (Security & Rubric Subagent): Audit P0/P1 compliance stories and anti-hallucination open_questions."""
+        """Node 4 (Security & HITL Subagent): Flag P0/CONFLICT items for Human-in-the-Loop review & check open_questions."""
         logger.info("[LangGraph: security_reviewer] Reviewing security with model tier '%s'", self.cfg.subagent_models.security_reviewer)
         payload = state["payload"]
         assert payload is not None
+        for story in payload.stories:
+            if story.backlog_alignment == BacklogAlignment.CONFLICT or story.priority.startswith("P0") or story.confidence_score < 0.80:
+                story.requires_human_approval = True
         if not payload.summary.open_questions:
             payload.summary.open_questions.append("Confirm target SLA and compliance sign-off with stakeholders.")
         return {"payload": payload, "agent_trace": [*state["agent_trace"], "security_reviewer"]}
+
+    def _estimate_finops_cost(self, doc_text: str, payload: LLMExtractionPayload) -> tuple[int, float]:
+        """Compute estimated token count and FinOps USD cost based on active subagent model tier."""
+        in_tokens = max(1, (len(doc_text) + 1200) // 4)
+        out_tokens = max(1, len(payload.model_dump_json()) // 4)
+        total_tokens = in_tokens + out_tokens
+        if self.offline_mode:
+            return total_tokens, 0.0
+        in_rate, out_rate = _MODEL_PRICING_PER_1M.get(self.cfg.subagent_models.extractor_agent, (0.15, 0.60))
+        cost_usd = round((in_tokens * in_rate + out_tokens * out_rate) / 1_000_000, 6)
+        return total_tokens, cost_usd
+
+    def _append_audit_trail(self, result: BacklogAnalysisResult) -> None:
+        """Append an immutable JSONL compliance record to outputs/audit_trail.jsonl."""
+        try:
+            audit_path = Path(self.cfg.paths.audit_log_path)
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                **result.metadata.model_dump(),
+                "stories_generated": len(result.stories),
+                "hitl_approval_required_count": sum(1 for s in result.stories if s.requires_human_approval),
+            }
+            with audit_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except Exception as exc:
+            logger.warning("Audit log write skipped: %s", exc)
 
     def _call_langchain_structured(self, doc_text: str, existing_items: list[ExistingBacklogItem], source_name: str, model_id: str | None = None) -> LLMExtractionPayload:
         """Execute LangChain LCEL chain (`ChatPromptTemplate | ChatOpenAI.with_structured_output`)."""

@@ -46,6 +46,11 @@ class GeneratedUserStory(BaseModel):
     backlog_alignment: BacklogAlignment = Field(description="NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT")
     related_backlog_ids: list[str] = Field(default_factory=list, description="IDs from existing backlog")
     alignment_notes: str = Field(default="", description="Explanation of overlap/update/conflict")
+    confidence_score: float = Field(default=0.92, ge=0.0, le=1.0, description="AI extraction confidence (0.0 to 1.0)")
+    requires_human_approval: bool = Field(
+        default=False,
+        description="True when item is P0-Critical, CONFLICT, or low confidence and requires HITL sign-off",
+    )
 
     @field_validator("acceptance_criteria")
     @classmethod
@@ -59,11 +64,15 @@ class GeneratedUserStory(BaseModel):
 class ExecutionMetadata(BaseModel):
     scenario_id: str
     source_file: str
+    document_sha256: str = Field(default="", description="SHA-256 fingerprint of raw input for idempotency & audit")
     execution_mode: str
     model_name: str
     prompt_version: str
     latency_ms: int
     existing_backlog_count: int
+    pii_redacted_count: int = Field(default=0, description="Count of PII/secret tokens masked prior to LLM call")
+    estimated_tokens: int = Field(default=0, description="Estimated total input + output tokens consumed")
+    estimated_cost_usd: float = Field(default=0.0, description="FinOps estimated API cost in USD")
     agent_trace: list[str] = Field(default_factory=list, description="Executed LangGraph multi-agent node trace")
     subagent_models_used: dict[str, str] = Field(default_factory=dict, description="Model assigned to each subagent for cost optimization")
 

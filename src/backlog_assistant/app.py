@@ -48,10 +48,15 @@ def render_app() -> None:
         else:
             target = samples_dir / sample
         res = BacklogEngine(config=cfg, force_offline=offline).analyze(target)
-        st.success(f"Completed in {res.metadata.latency_ms} ms ({res.metadata.execution_mode}) — {len(res.stories)} {cfg.output_item_label}s")
+        st.success(
+            f"Completed in {res.metadata.latency_ms} ms ({res.metadata.execution_mode}) | "
+            f"SHA256: `{res.metadata.document_sha256}` | PII Redacted: {res.metadata.pii_redacted_count} | "
+            f"Est. Cost: ${res.metadata.estimated_cost_usd:.6f}"
+        )
         st.write(res.summary.executive_summary)
         for s in res.stories:
-            with st.expander(f"{s.id} | [{s.backlog_alignment.value}] {s.title} — {s.priority} ({s.story_points} pts)", expanded=True):
+            hitl_badge = " ⚠️ [HITL APPROVAL REQUIRED]" if s.requires_human_approval else ""
+            with st.expander(f"{s.id} | [{s.backlog_alignment.value}] {s.title} — {s.priority} ({s.story_points} pts){hitl_badge}", expanded=True):
                 st.markdown(f"**{cfg.output_item_label}:** *{s.user_story}*\n\n**Context:** {s.technical_description}\n\n**Acceptance Criteria:**\n" + "\n".join(f"- [x] {ac}" for ac in s.acceptance_criteria))
         c1, c2 = st.columns(2)
         c1.download_button("Download JSON", res.model_dump_json(indent=2), file_name="result.json")

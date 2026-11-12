@@ -204,5 +204,38 @@ def test_langgraph_multi_agent_state_graph_and_mermaid() -> None:
     assert res_custom.metadata.subagent_models_used["security_reviewer"] == "gpt-4o-mini"
 
 
+def test_fde_guardrails_pii_redaction_finops_hitl_and_audit_log(tmp_path: Path) -> None:
+    """Verify the 5 enterprise FDE guardrails: PII scrubbing, SHA256, FinOps cost, HITL gate, and audit_trail.jsonl."""
+    from backlog_assistant.parser import redact_pii_and_secrets
+
+    # 1. Pre-LLM PII & Secret Redaction
+    dirty_text = "Contact alice@client.com or use token sk-proj-1234567890abcdefghijklmnop and card 4111 2222 3333 4444."
+    scrubbed, pii_count = redact_pii_and_secrets(dirty_text)
+    assert pii_count == 3
+    assert "[REDACTED_EMAIL]" in scrubbed
+    assert "[REDACTED_SECRET]" in scrubbed
+    assert "[REDACTED_PAN]" in scrubbed
+    assert "alice@client.com" not in scrubbed
+
+    # 2. Run engine with custom audit log path and verify SHA-256, HITL gate on P0/CONFLICT, and JSONL audit log
+    audit_file = tmp_path / "audit_trail.jsonl"
+    cfg = load_scenario_config().with_overrides({"paths.audit_log_path": str(audit_file)})
+    engine = BacklogEngine(config=cfg, force_offline=True)
+    res_pci = engine.analyze("data/samples/03_pci_compliance_spec.pdf")
+
+    assert len(res_pci.metadata.document_sha256) == 16
+    assert res_pci.metadata.estimated_tokens > 0
+    # STORY-001 in PCI spec is P0-Critical & CONFLICT -> must trigger HITL approval gate
+    assert res_pci.stories[0].requires_human_approval is True
+    assert res_pci.stories[1].requires_human_approval is False
+
+    # Verify append-only JSONL compliance audit log was written
+    assert audit_file.exists()
+    logged = json.loads(audit_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert logged["document_sha256"] == res_pci.metadata.document_sha256
+    assert logged["hitl_approval_required_count"] == 1
+
+
+
 
 
