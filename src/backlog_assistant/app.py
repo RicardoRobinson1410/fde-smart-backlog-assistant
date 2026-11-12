@@ -11,6 +11,7 @@ import os
 import re
 import tempfile
 import threading
+import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +21,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -329,13 +329,10 @@ def _answer_with_live_openai_or_analytical_engine(
         },
     ]
 
-    # Try Live OpenAI API first if OPENAI_API_KEY is configured
+    # Try Live OpenAI API first if OPENAI_API_KEY is configured (using stdlib urllib to avoid numpy/C-extension thread import collisions)
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if api_key:
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-            from langchain_openai import ChatOpenAI
-
             context_payload = {
                 "active_document": active_doc["filename"] if active_doc else "All Scenarios (01_sprint_planning_notes.txt, 02_incident_postmortem.md, 03_pci_compliance_spec.pdf)",
                 "stories_in_scope": [
@@ -368,21 +365,37 @@ def _answer_with_live_openai_or_analytical_engine(
                 f"PROJECT CONTEXT JSON:\n{json.dumps(context_payload, indent=2)}"
             )
 
-            chat_msgs: list[Any] = [SystemMessage(content=sys_prompt)]
+            api_msgs: list[dict[str, str]] = [{"role": "system", "content": sys_prompt}]
             for h in history[-6:]:
-                role = h.get("role", "user")
-                content = h.get("content", "")
+                role = "assistant" if h.get("role") == "assistant" else "user"
+                content = str(h.get("content", "")).strip()
                 if content:
-                    chat_msgs.append(HumanMessage(content=f"[{role.upper()}]: {content}"))
-            chat_msgs.append(HumanMessage(content=q))
+                    api_msgs.append({"role": role, "content": content})
+            api_msgs.append({"role": "user", "content": q})
 
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, timeout=15)
-            ai_resp = llm.invoke(chat_msgs)
-            md_answer = str(ai_resp.content).strip()
+            req_body = json.dumps(
+                {
+                    "model": "gpt-4o-mini",
+                    "temperature": 0.2,
+                    "messages": api_msgs,
+                }
+            ).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=req_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                resp_json = json.loads(resp.read().decode("utf-8"))
+            md_answer = str(resp_json["choices"][0]["message"]["content"]).strip()
 
             steps.append(
                 {
-                    "title": f"🤖 Executed Live LLM Reasoning (gpt-4o-mini • OpenAI API)",
+                    "title": "🤖 Executed Live LLM Reasoning (gpt-4o-mini • OpenAI API)",
                     "detail": f"Synthesized context-aware response grounded in {len(all_stories)} stories and 6 baseline tickets.",
                 }
             )
@@ -2012,37 +2025,64 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         )
 
     with chart_col:
-        fig = go.Figure(
-            data=[
-                go.Bar(
-                    name="Naive All-gpt-4o ($0.00620/doc)",
-                    x=["Per 1,000 Docs", f"Monthly ({vol:,} Docs)", f"Annual ({vol*12:,} Docs)"],
-                    y=[round(1000 * naive_per_doc, 2), naive_monthly, round(naive_monthly * 12, 2)],
-                    marker_color="#f43f5e",
-                    text=[f"${1000*naive_per_doc:,.2f}", f"${naive_monthly:,.2f}", f"${naive_monthly*12:,.2f}"],
-                    textposition="auto",
-                ),
-                go.Bar(
-                    name="Our Tiered Router ($0.00036/doc)",
-                    x=["Per 1,000 Docs", f"Monthly ({vol:,} Docs)", f"Annual ({vol*12:,} Docs)"],
-                    y=[round(1000 * tiered_per_doc, 2), tiered_monthly, round(tiered_monthly * 12, 2)],
-                    marker_color="#10a37f",
-                    text=[f"${1000*tiered_per_doc:,.2f}", f"${tiered_monthly:,.2f}", f"${tiered_monthly*12:,.2f}"],
-                    textposition="auto",
-                ),
-            ]
+        naive_1k = 1000 * naive_per_doc
+        tiered_1k = 1000 * tiered_per_doc
+        naive_yr = naive_monthly * 12
+        tiered_yr = tiered_monthly * 12
+
+        st.markdown(
+            f"""
+            <div style="background:#141414; border-radius:14px; padding:18px; border:1px solid #2a2a2a; height:100%;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <div style="font-weight:700; font-size:0.94rem; color:#ffffff;">📊 Cost Comparison: Naive All-gpt-4o vs. Tiered Router</div>
+                    <div style="font-size:0.78rem; color:#cbd5e1;">
+                        <span style="color:#f43f5e; font-weight:700;">■ Naive All-gpt-4o</span> &nbsp;&nbsp;
+                        <span style="color:#10a37f; font-weight:700;">■ Our Tiered Router (94.2% Saved)</span>
+                    </div>
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
+                        <span><strong>Per 1,000 Documents</strong></span>
+                        <span><strong style="color:#f43f5e;">${naive_1k:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_1k:,.2f}</strong></span>
+                    </div>
+                    <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;">
+                        <div style="background:#f43f5e; width:100%; height:100%;"></div>
+                    </div>
+                    <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;">
+                        <div style="background:#10a37f; width:6%; height:100%;"></div>
+                    </div>
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
+                        <span><strong>Monthly ({vol:,} Docs)</strong></span>
+                        <span><strong style="color:#f43f5e;">${naive_monthly:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_monthly:,.2f}</strong></span>
+                    </div>
+                    <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;">
+                        <div style="background:#f43f5e; width:100%; height:100%;"></div>
+                    </div>
+                    <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;">
+                        <div style="background:#10a37f; width:6%; height:100%;"></div>
+                    </div>
+                </div>
+
+                <div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
+                        <span><strong>Annual ({vol*12:,} Docs)</strong></span>
+                        <span><strong style="color:#f43f5e;">${naive_yr:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_yr:,.2f}</strong></span>
+                    </div>
+                    <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;">
+                        <div style="background:#f43f5e; width:100%; height:100%;"></div>
+                    </div>
+                    <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;">
+                        <div style="background:#10a37f; width:6%; height:100%;"></div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        fig.update_layout(
-            barmode="group",
-            height=290,
-            margin=dict(l=20, r=20, t=30, b=20),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#ececec"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            yaxis_title="Cost in USD ($)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
