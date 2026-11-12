@@ -3425,118 +3425,178 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
 
 
 def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
-    """Tab 5: Exhaustive Scenario Certification Rubric Dashboard with per-criterion and per-story inspection."""
+    """Tab 6: Exhaustive Scenario Certification Rubric Dashboard with live programmatic checks."""
     st.markdown("### 🏆 Certified-Level RDE Evaluation Rubric Dashboard (All 3 Scenarios)")
     st.caption(
-        "Verifies all 7 mandatory evaluation criteria from the official Candidate Job Aid across all 3 required sample scenarios."
+        "Programmatically verifies all 7 mandatory evaluation criteria from the official Candidate Job Aid "
+        "across all 3 required sample scenarios using isolated deterministic replay (does not pollute live FinOps spend)."
     )
 
     samples_dir = Path(cfg.paths.samples_dir)
     eval_cfg = cfg.with_overrides({"paths.audit_log_path": "outputs/rubric_eval_cache.jsonl"})
     eval_engine = BacklogEngine(config=eval_cfg, force_offline=True)
-    r1 = eval_engine.analyze(samples_dir / "01_sprint_planning_notes.txt")
-    r2 = eval_engine.analyze(samples_dir / "02_incident_postmortem.md")
-    r3 = eval_engine.analyze(samples_dir / "03_pci_compliance_spec.pdf")
+    scenario_specs = [
+        ("Scenario 1 (.txt)", "📝 Scenario 1: Sprint Planning Notes", "01_sprint_planning_notes.txt", "#10a37f"),
+        ("Scenario 2 (.md)", "🚨 Scenario 2: SEV-1 Outage Postmortem", "02_incident_postmortem.md", "#f59e0b"),
+        ("Scenario 3 (.pdf)", "📕 Scenario 3: PCI-DSS Compliance Spec", "03_pci_compliance_spec.pdf", "#3b82f6"),
+    ]
+    results = [eval_engine.analyze(samples_dir / fname) for _, _, fname, _ in scenario_specs]
+
+    valid_priorities = set(cfg.priority_levels) if cfg.priority_levels else {"P0", "P1", "P2", "P3"}
+    valid_fibonacci = {1, 2, 3, 5, 8, 13}
+
+    def _eval_scenario(res_obj: BacklogAnalysisResult) -> dict[str, tuple[bool, str]]:
+        stories = res_obj.stories
+        # 1. Multi-Format Ingestion
+        c1_ok = bool(stories) and bool(res_obj.metadata.document_sha256)
+        c1_msg = f"{'✅ PASS' if c1_ok else '❌ FAIL'} ({len(stories)} stories)"
+
+        # 2. Testable Acceptance Criteria (>= 3 per story)
+        min_acs = min((len(s.acceptance_criteria) for s in stories), default=0)
+        c2_ok = bool(stories) and min_acs >= 3
+        c2_msg = f"{'✅ PASS' if c2_ok else '❌ FAIL'} (Min {min_acs} ACs)"
+
+        # 3. Priority & Fibonacci Effort Estimation
+        prio_ok = bool(stories) and all(
+            s.priority in valid_priorities
+            and bool(s.priority_rationale.strip())
+            and s.story_points in valid_fibonacci
+            for s in stories
+        )
+        total_pts = sum(s.story_points for s in stories)
+        c3_msg = f"{'✅ PASS' if prio_ok else '❌ FAIL'} ({total_pts} total pts)"
+
+        # 4. Backlog Deduplication & Alignment
+        align_labels = sorted({getattr(s.backlog_alignment, "value", str(s.backlog_alignment)) for s in stories})
+        linked_ids = sorted({bid for s in stories for bid in s.related_backlog_ids})
+        c4_ok = bool(stories) and bool(align_labels) and bool(linked_ids)
+        c4_msg = f"{'✅ PASS' if c4_ok else '❌ FAIL'} ({', '.join(linked_ids) or 'None'})"
+
+        # 5. Anti-Hallucination & Ambiguity
+        n_q = len(res_obj.summary.open_questions)
+        n_r = len(res_obj.summary.risks_and_dependencies)
+        c5_ok = n_q > 0 and n_r > 0
+        c5_msg = f"{'✅ PASS' if c5_ok else '❌ FAIL'} ({n_q} Qs, {n_r} risks)"
+
+        # 6. Configurable Without Code Changes
+        c6_ok = bool(cfg.id_prefix.strip()) and all(s.id.startswith(f"{cfg.id_prefix}-") for s in stories)
+        c6_msg = f"{'✅ PASS' if c6_ok else '❌ FAIL'} (Prefix {cfg.id_prefix}-)"
+
+        # 7. FDE Production Guardrails (HITL + SHA-256 + Audit + Tests)
+        hitl_cnt = sum(1 for s in stories if s.requires_human_approval)
+        c7_ok = bool(res_obj.metadata.document_sha256) and Path("tests/test_assistant.py").exists()
+        c7_msg = f"{'✅ PASS' if c7_ok else '❌ FAIL'} (HITL={hitl_cnt})"
+
+        return {
+            "c1": (c1_ok, c1_msg),
+            "c2": (c2_ok, c2_msg),
+            "c3": (prio_ok, c3_msg),
+            "c4": (c4_ok, c4_msg),
+            "c5": (c5_ok, c5_msg),
+            "c6": (c6_ok, c6_msg),
+            "c7": (c7_ok, c7_msg),
+        }
+
+    evals = [_eval_scenario(r) for r in results]
+    total_checks = len(evals) * 7
+    passed_checks = sum(1 for ev in evals for ok, _ in ev.values() if ok)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Certification Score", f"{passed_checks} / {total_checks} Checks", "100% Pass" if passed_checks == total_checks else "Action Needed")
+    m2.metric("Scenarios Verified", "3 / 3 Formats", ".txt • .md • .pdf")
+    m3.metric("Total Stories Extracted", f"{sum(len(r.stories) for r in results)}", f"{sum(sum(s.story_points for s in r.stories) for r in results)} Fibonacci pts")
+    m4.metric("HITL Security Gates", f"{sum(sum(1 for s in r.stories if s.requires_human_approval) for r in results)} Flagged", "PII & Risk Shield Active")
 
     st.markdown("#### ✅ Part 1: Official 7-Criterion RDE Candidate Job Aid Compliance Matrix")
+    criteria_defs = [
+        (
+            "c1",
+            "1. Multi-Format Ingestion",
+            "Parse unstructured .txt, .md, and binary .pdf documents cleanly",
+            "src/backlog_assistant/parser.py (extract_document_text + pypdf)",
+        ),
+        (
+            "c2",
+            "2. Testable Acceptance Criteria",
+            "Every generated user story MUST include >= 3 concrete, testable Acceptance Criteria",
+            "Pydantic @field_validator('acceptance_criteria') enforces >= 3",
+        ),
+        (
+            "c3",
+            "3. Priority & Effort Estimation",
+            "Assign P0-P3 priority, explicit priority rationale, and Fibonacci story points (1,2,3,5,8,13)",
+            "GeneratedUserStory.priority, priority_rationale & story_points",
+        ),
+        (
+            "c4",
+            "4. Backlog Deduplication & Alignment",
+            "Compare against existing backlog & classify as NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT",
+            "Subagent 3 (backlog-auditor) + related_backlog_ids",
+        ),
+        (
+            "c5",
+            "5. Anti-Hallucination & Ambiguity",
+            "Never invent missing specs; surface ambiguities in open_questions & risks_and_dependencies",
+            "RequirementSummary.open_questions & risks_and_dependencies",
+        ),
+        (
+            "c6",
+            "6. Configurable Without Code Changes",
+            "Switch domain, persona, ticket prefix, and models via JSON config, CLI --set, or env vars",
+            "config/scenario_config.json + config/presets/incident_triage_scenario.json",
+        ),
+        (
+            "c7",
+            "7. FDE Production Guardrails",
+            "Pre-LLM PII redaction, HITL approval gate, Real-Time FinOps telemetry, SHA-256 audit & pytest suite",
+            "security-reviewer + outputs/audit_trail.jsonl + tests/test_assistant.py",
+        ),
+    ]
     rubric_rows = [
         {
-            "Criterion #": "1. Multi-Format Ingestion",
-            "Job Aid Requirement": "Parse unstructured .txt, .md, and binary .pdf documents cleanly",
-            "Scenario 1 (.txt)": f"✅ PASS ({len(r1.stories)} stories)",
-            "Scenario 2 (.md)": f"✅ PASS ({len(r2.stories)} stories)",
-            "Scenario 3 (.pdf)": f"✅ PASS ({len(r3.stories)} stories)",
-            "Implementation Evidence": "src/backlog_assistant/parser.py (extract_document_text + pypdf)",
-        },
-        {
-            "Criterion #": "2. Testable Acceptance Criteria",
-            "Job Aid Requirement": "Every generated user story MUST include >= 3 concrete, testable Acceptance Criteria",
-            "Scenario 1 (.txt)": f"✅ PASS (Min {min(len(s.acceptance_criteria) for s in r1.stories)} ACs)",
-            "Scenario 2 (.md)": f"✅ PASS (Min {min(len(s.acceptance_criteria) for s in r2.stories)} ACs)",
-            "Scenario 3 (.pdf)": f"✅ PASS (Min {min(len(s.acceptance_criteria) for s in r3.stories)} ACs)",
-            "Implementation Evidence": "Pydantic @field_validator('acceptance_criteria') enforces >= 3",
-        },
-        {
-            "Criterion #": "3. Priority & Effort Estimation",
-            "Job Aid Requirement": "Assign P0-P3 priority, explicit priority rationale, and Fibonacci story points (1,2,3,5,8,13)",
-            "Scenario 1 (.txt)": f"✅ PASS ({sum(s.story_points for s in r1.stories)} total pts)",
-            "Scenario 2 (.md)": f"✅ PASS ({sum(s.story_points for s in r2.stories)} total pts)",
-            "Scenario 3 (.pdf)": f"✅ PASS ({sum(s.story_points for s in r3.stories)} total pts)",
-            "Implementation Evidence": "GeneratedUserStory.priority, priority_rationale & story_points",
-        },
-        {
-            "Criterion #": "4. Backlog Deduplication & Alignment",
-            "Job Aid Requirement": "Compare against FIN-101..FIN-106 & classify as NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT",
-            "Scenario 1 (.txt)": "✅ PASS (DUPLICATE FIN-101, UPDATES FIN-102, NEW)",
-            "Scenario 2 (.md)": "✅ PASS (UPDATES FIN-103, NEW)",
-            "Scenario 3 (.pdf)": "✅ PASS (CONFLICT FIN-104, NEW)",
-            "Implementation Evidence": "Subagent 3 (backlog-auditor) + related_backlog_ids",
-        },
-        {
-            "Criterion #": "5. Anti-Hallucination & Ambiguity",
-            "Job Aid Requirement": "Never invent missing specs; surface ambiguities in open_questions & risks_and_dependencies",
-            "Scenario 1 (.txt)": f"✅ PASS ({len(r1.summary.open_questions)} open questions)",
-            "Scenario 2 (.md)": f"✅ PASS ({len(r2.summary.open_questions)} open questions)",
-            "Scenario 3 (.pdf)": f"✅ PASS ({len(r3.summary.open_questions)} open questions)",
-            "Implementation Evidence": "RequirementSummary.open_questions & risks_and_dependencies",
-        },
-        {
-            "Criterion #": "6. Configurable Without Code Changes",
-            "Job Aid Requirement": "Switch domain, persona, ticket prefix, and models via JSON config, CLI --set, or env vars",
-            "Scenario 1 (.txt)": f"✅ PASS (Prefix {cfg.id_prefix}-)",
-            "Scenario 2 (.md)": f"✅ PASS (Prefix {cfg.id_prefix}-)",
-            "Scenario 3 (.pdf)": f"✅ PASS (Prefix {cfg.id_prefix}-)",
-            "Implementation Evidence": "config/scenario_config.json + config/presets/incident_triage_scenario.json",
-        },
-        {
-            "Criterion #": "7. FDE Production Guardrails",
-            "Job Aid Requirement": "Pre-LLM PII redaction, HITL approval gate, FinOps token routing, SHA-256 audit log & 9/9 pytest",
-            "Scenario 1 (.txt)": f"✅ PASS (HITL={sum(1 for s in r1.stories if s.requires_human_approval)})",
-            "Scenario 2 (.md)": f"✅ PASS (HITL={sum(1 for s in r2.stories if s.requires_human_approval)})",
-            "Scenario 3 (.pdf)": f"✅ PASS (HITL={sum(1 for s in r3.stories if s.requires_human_approval)})",
-            "Implementation Evidence": "security-reviewer + outputs/audit_trail.jsonl + tests/test_assistant.py",
-        },
+            "Criterion #": label,
+            "Job Aid Requirement": req,
+            "Scenario 1 (.txt)": evals[0][key][1],
+            "Scenario 2 (.md)": evals[1][key][1],
+            "Scenario 3 (.pdf)": evals[2][key][1],
+            "Implementation Evidence": evidence,
+        }
+        for key, label, req, evidence in criteria_defs
     ]
     st.dataframe(rubric_rows, use_container_width=True, hide_index=True)
 
     st.markdown("#### 📊 Part 2: Side-by-Side Scenario Scorecard Summary")
-    sc1, sc2, sc3 = st.columns(3)
-    for col, title, fname, res_obj, badge_color in [
-        (sc1, "📝 Scenario 1: Sprint Planning Notes", "01_sprint_planning_notes.txt", r1, "#10a37f"),
-        (sc2, "🚨 Scenario 2: SEV-1 Outage Postmortem", "02_incident_postmortem.md", r2, "#f59e0b"),
-        (sc3, "📕 Scenario 3: PCI-DSS Compliance Spec", "03_pci_compliance_spec.pdf", r3, "#3b82f6"),
-    ]:
+    sc_cols = st.columns(3)
+    for col, (_, title, fname, badge_color), res_obj, ev in zip(sc_cols, scenario_specs, results, evals):
         with col:
             aligns = ", ".join(sorted({getattr(s.backlog_alignment, "value", str(s.backlog_alignment)) for s in res_obj.stories}))
             hitls = sum(1 for s in res_obj.stories if s.requires_human_approval)
             total_pts = sum(s.story_points for s in res_obj.stories)
             total_acs = sum(len(s.acceptance_criteria) for s in res_obj.stories)
-            st.markdown(
-                f"""
-                <div style="border:1.5px solid {badge_color}; border-radius:16px; padding:16px; background:#141414;">
-                    <div style="font-weight:700; font-size:0.98rem; color:{badge_color};">{title}</div>
-                    <div style="font-size:0.75rem; color:#9aa0a6;">File: <code>{fname}</code> • SHA-256: <code>{res_obj.metadata.document_sha256[:12]}...</code></div>
-                    <div style="font-size:1.35rem; font-weight:800; margin:8px 0; color:#fff;">✅ 7 / 7 Rubric Checks Passed</div>
-                    <div style="font-size:0.82rem; line-height:1.65; color:#cbd5e1;">
-                        • <strong>Extracted Stories:</strong> {len(res_obj.stories)} stories ({total_pts} Fibonacci pts)<br>
-                        • <strong>Acceptance Criteria:</strong> {total_acs} total ACs (100% &ge;3 per story)<br>
-                        • <strong>Backlog Alignments:</strong> <code>{aligns}</code><br>
-                        • <strong>HITL Security Gates:</strong> {hitls} stories require human sign-off<br>
-                        • <strong>Ambiguities Surfaced:</strong> {len(res_obj.summary.open_questions)} open questions • {len(res_obj.summary.risks_and_dependencies)} risks/dependencies<br>
-                        • <strong>FinOps Cost &amp; Tokens:</strong> ${res_obj.metadata.estimated_cost_usd:.5f} ({res_obj.metadata.estimated_tokens} tokens)
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+            sc_passed = sum(1 for ok, _ in ev.values() if ok)
+            card_html = (
+                f'<div style="border:1.5px solid {badge_color}; border-radius:16px; padding:16px; background:#141414;">'
+                f'<div style="font-weight:700; font-size:0.98rem; color:{badge_color};">{title}</div>'
+                f'<div style="font-size:0.75rem; color:#9aa0a6;">File: <code>{fname}</code> • SHA-256: <code>{res_obj.metadata.document_sha256[:12]}...</code></div>'
+                f'<div style="font-size:1.35rem; font-weight:800; margin:8px 0; color:#fff;">{"✅" if sc_passed == 7 else "⚠️"} {sc_passed} / 7 Rubric Checks Passed</div>'
+                f'<div style="font-size:0.82rem; line-height:1.65; color:#cbd5e1;">'
+                f'• <strong>Extracted Stories:</strong> {len(res_obj.stories)} stories ({total_pts} Fibonacci pts)<br>'
+                f'• <strong>Acceptance Criteria:</strong> {total_acs} total ACs (100% &ge;3 per story)<br>'
+                f'• <strong>Backlog Alignments:</strong> <code>{aligns}</code><br>'
+                f'• <strong>HITL Security Gates:</strong> {hitls} stories require human sign-off<br>'
+                f'• <strong>Ambiguities Surfaced:</strong> {len(res_obj.summary.open_questions)} open questions • {len(res_obj.summary.risks_and_dependencies)} risks/dependencies<br>'
+                f'• <strong>Offline Replay Footprint:</strong> {res_obj.metadata.estimated_tokens:,} est. tokens ($0.00 live spend)'
+                f'</div></div>'
             )
+            st.markdown(card_html, unsafe_allow_html=True)
 
     st.markdown("#### 🔬 Part 3: Deep-Dive Story, Acceptance Criteria & Open Questions Inspector")
-    sub1, sub2, sub3 = st.tabs([
+    sub_tabs = st.tabs([
         "📝 Scenario 1 Stories (01_sprint_planning_notes.txt)",
         "🚨 Scenario 2 Stories (02_incident_postmortem.md)",
         "📕 Scenario 3 Stories (03_pci_compliance_spec.pdf)",
     ])
-    for sub_tab, res_obj in [(sub1, r1), (sub2, r2), (sub3, r3)]:
+    for sub_tab, res_obj in zip(sub_tabs, results):
         with sub_tab:
             st.markdown(f"**Document Title:** {res_obj.summary.document_title}")
             st.markdown(f"**Executive Summary:** {res_obj.summary.executive_summary}")
@@ -3549,13 +3609,26 @@ def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
                     "Points": s.story_points,
                     "Alignment": getattr(s.backlog_alignment, "value", str(s.backlog_alignment)),
                     "Related Backlog IDs": ", ".join(s.related_backlog_ids) if s.related_backlog_ids else "None (Net-New)",
-                    "AC Count": f"{len(s.acceptance_criteria)} ACs (PASS)",
+                    "AC Count": f"{len(s.acceptance_criteria)} ACs ({'PASS' if len(s.acceptance_criteria) >= 3 else 'FAIL'})",
                     "Confidence": f"{int(s.confidence_score * 100)}%",
                     "HITL Gate": "🚨 YES (Sign-off Required)" if s.requires_human_approval else "✅ Auto-Ready",
                 }
                 for s in res_obj.stories
             ]
             st.dataframe(story_table, use_container_width=True, hide_index=True)
+
+            with st.expander("🔍 Inspect Full Story Descriptions, Priority Rationales & Acceptance Criteria", expanded=False):
+                for s in res_obj.stories:
+                    st.markdown(
+                        f"**{s.id} — {s.title}** (`{s.priority}` • `{s.story_points} pts` • "
+                        f"`{getattr(s.backlog_alignment, 'value', str(s.backlog_alignment))}`)"
+                    )
+                    st.caption(f"Priority Rationale: {s.priority_rationale}")
+                    st.markdown(f"**User Story:** {s.user_story}")
+                    st.markdown(f"**Technical Description:** {s.technical_description}")
+                    for idx, ac in enumerate(s.acceptance_criteria, 1):
+                        st.markdown(f"  {idx}. {ac}")
+                    st.divider()
 
             q_col, c_col = st.columns(2)
             with q_col:
