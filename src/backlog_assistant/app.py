@@ -208,13 +208,18 @@ def build_all_scenarios_bundle(cfg: ScenarioConfig) -> dict[str, dict[str, Any]]
     return bundle
 
 
-_CHAT_SERVER_STATE: dict[str, Any] = {
-    "started": False,
-    "port": 8765,
-    "cfg": None,
-    "bundle": {},
-    "backlog": [],
-}
+import builtins
+
+if not hasattr(builtins, "_FDE_CHAT_SERVER_STATE"):
+    builtins._FDE_CHAT_SERVER_STATE = {
+        "started": False,
+        "port": 8765,
+        "cfg": None,
+        "bundle": {},
+        "backlog": [],
+        "configs_by_id": {},
+    }
+_CHAT_SERVER_STATE: dict[str, Any] = builtins._FDE_CHAT_SERVER_STATE
 
 
 def _markdown_to_clean_html(md_text: str) -> str:
@@ -873,10 +878,13 @@ def _answer_with_live_openai_or_analytical_engine(
 
 def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]]) -> int:
     """Start a singleton local HTTP server on 127.0.0.1:8765 so the ChatGPT iframe can upload files (.txt/.md/.pdf) and run live OpenAI multi-turn chat."""
+    from urllib.parse import parse_qs, urlparse
+
     existing_backlog = [b.model_dump() for b in load_existing_backlog(cfg.paths.baseline_backlog)]
     _CHAT_SERVER_STATE["cfg"] = cfg
     _CHAT_SERVER_STATE["bundle"] = bundle
     _CHAT_SERVER_STATE["backlog"] = existing_backlog
+    _CHAT_SERVER_STATE.setdefault("configs_by_id", {})[cfg.scenario_id] = cfg
 
     if _CHAT_SERVER_STATE["started"]:
         return int(_CHAT_SERVER_STATE["port"])
@@ -900,14 +908,19 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
             self._send_json(200, {"ok": True})
 
         def do_GET(self) -> None:
-            if self.path == "/api/tasks":
-                cur_cfg: ScenarioConfig = _CHAT_SERVER_STATE["cfg"]
+            parsed = urlparse(self.path)
+            qs = parse_qs(parsed.query)
+            req_sid = (qs.get("scenario_id") or [""])[0]
+            cur_cfg: ScenarioConfig = (
+                _CHAT_SERVER_STATE.get("configs_by_id", {}).get(req_sid)
+                or _CHAT_SERVER_STATE["cfg"]
+            )
+            if parsed.path == "/api/tasks":
                 items = load_existing_backlog(cur_cfg.paths.baseline_backlog)
                 _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
                 self._send_json(200, {"tasks": _CHAT_SERVER_STATE["backlog"]})
                 return
-            if self.path == "/api/finops":
-                cur_cfg = _CHAT_SERVER_STATE["cfg"]
+            if parsed.path == "/api/finops":
                 audit_rows = load_audit_history(cur_cfg.paths.audit_log_path)
                 live_rows = [
                     r for r in audit_rows
@@ -2349,10 +2362,10 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     <body>
       <!-- Jira Breadcrumb & Title -->
       <div class="jira-breadcrumb">
-        <span>Projects</span> / <span>FDE-FinTech</span> / <span>Smart Backlog Board</span>
+        <span>Projects</span> / <span>{html.escape(cfg.domain_name)}</span> / <span>{html.escape(cfg.project_title)}</span>
       </div>
       <div class="jira-header-row">
-        <h1 class="jira-title">FDE Kanban board</h1>
+        <h1 class="jira-title">{html.escape(cfg.project_title)} ({html.escape(cfg.id_prefix)}) — Kanban Board</h1>
         <button class="jira-primary-btn" onclick="openCreateModal()">+ Create issue</button>
       </div>
 
@@ -2446,6 +2459,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
 
       <script>
         const KANBAN_API_BASE = "http://127.0.0.1:{int(_CHAT_SERVER_STATE.get('port') or 8765)}";
+        const SCENARIO_ID = {json.dumps(cfg.scenario_id)};
         let cardsData = {cards_json};
         let lastTasksSignature = '';
         let activeQuickFilter = null;
@@ -2780,7 +2794,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
 
         async function syncKanbanWithBackend() {{
           try {{
-            const resp = await fetch(KANBAN_API_BASE + '/api/tasks');
+            const resp = await fetch(KANBAN_API_BASE + '/api/tasks?scenario_id=' + encodeURIComponent(SCENARIO_ID));
             if (!resp.ok) return;
             const data = await resp.json();
             const tasks = data.tasks || [];
@@ -3362,9 +3376,10 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
       <script>
         const BUDGET_LIMIT = {budget_limit:.4f};
         const TOKEN_THRESHOLD = {int(token_threshold)};
+        const FINOPS_SCENARIO_ID = {json.dumps(cfg.scenario_id)};
         async function pollFinops() {{
           try {{
-            const resp = await fetch('http://127.0.0.1:{finops_port}/api/finops');
+            const resp = await fetch('http://127.0.0.1:{finops_port}/api/finops?scenario_id=' + encodeURIComponent(FINOPS_SCENARIO_ID));
             if (!resp.ok) return;
             const d = await resp.json();
             const actualCost = Number(d.total_cost_usd || 0);
@@ -4846,7 +4861,7 @@ def render_portal() -> None:
         )
         st.session_state["latest_result"] = latest
     bundle = build_all_scenarios_bundle(cfg)
-    _CHAT_SERVER_STATE["bundle"] = bundle
+    ensure_chat_api_server(cfg, bundle)
 
     with tab_chat:
         render_chatgpt_conversational_first_tab(cfg, bundle)

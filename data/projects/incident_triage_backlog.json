@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "id": "REM-101",
+    "title": "Redis Cluster Split-Brain Quorum & Sentinel Auto-Failover",
+    "status": "In Progress",
+    "priority": "P0 - Critical",
+    "category": "Immediate Mitigation",
+    "story_points": 8,
+    "summary": "Enforce min-replicas-to-write=1 and quorum=2 across multi-AZ Redis Sentinel nodes to prevent split-brain writes during network partition."
+  },
+  {
+    "id": "REM-102",
+    "title": "Kubernetes HPA OOMKill Memory Limit & Pod Disruption Budget",
+    "status": "To Do",
+    "priority": "P1 - High",
+    "category": "Root-Cause Fix",
+    "story_points": 5,
+    "summary": "Raise worker pod memory limit from 1Gi to 2Gi, configure JVM heap to 70% container limit, and add PodDisruptionBudget minAvailable=80%."
+  },
+  {
+    "id": "REM-103",
+    "title": "PagerDuty SEV-1 p99 Latency Burn-Rate Alert & Runbook Link",
+    "status": "Done",
+    "priority": "P1 - High",
+    "category": "Observability/Alerting",
+    "story_points": 3,
+    "summary": "Trigger multi-window SLO burn-rate page when checkout API p99 > 850ms for 5m and attach automated diagnostic runbook."
+  },
+  {
+    "id": "REM-104",
+    "title": "Kafka Consumer Lag Circuit Breaker & Dead-Letter Replay CLI",
+    "status": "To Do",
+    "priority": "P2 - Medium",
+    "category": "Runbook Automation",
+    "story_points": 5,
+    "summary": "Isolate poison-pill events into DLQ topic after 3 retries and provide SRE one-click replay script with idempotency check."
+  }
+]
