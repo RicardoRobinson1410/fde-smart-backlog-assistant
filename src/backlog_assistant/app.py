@@ -842,7 +842,7 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -850,6 +850,15 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
 
         def do_OPTIONS(self) -> None:
             self._send_json(200, {"ok": True})
+
+        def do_GET(self) -> None:
+            if self.path == "/api/tasks":
+                cur_cfg: ScenarioConfig = _CHAT_SERVER_STATE["cfg"]
+                items = load_existing_backlog(cur_cfg.paths.baseline_backlog)
+                _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
+                self._send_json(200, {"tasks": _CHAT_SERVER_STATE["backlog"]})
+                return
+            self._send_json(404, {"error": "Not found"})
 
         def do_POST(self) -> None:
             try:
@@ -1653,11 +1662,14 @@ def render_chatgpt_conversational_first_tab(
             }});
             const res = await resp.json();
             if (approved && res.ok) {{
+              try {{
+                new BroadcastChannel('fde_backlog_sync').postMessage({{ type: 'tasks_updated', ticket: res.ticket || null }});
+              }} catch (e) {{}}
               card.style.borderColor = '#10a37f';
               card.innerHTML = `
                 <div style="color:#6ee7b7; font-weight:700; font-size:14px;">✅ Human-Approved &amp; Executed</div>
                 <div style="color:#e5e5e5; margin-top:6px;">${{res.message}}</div>
-                <div style="color:#9ca3af; font-size:11.5px; margin-top:6px;">Persisted to <code>data/existing_backlog.json</code> and logged to <code>outputs/audit_trail.jsonl</code>. Switch to the Jira Kanban tab to see the updated board!</div>
+                <div style="color:#9ca3af; font-size:11.5px; margin-top:6px;">Persisted to <code>data/existing_backlog.json</code> and logged to <code>outputs/audit_trail.jsonl</code>. The Jira Kanban board has been synced!</div>
               `;
             }} else if (!approved) {{
               card.style.borderColor = '#6b7280';
@@ -2216,7 +2228,9 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
       </div>
 
       <script>
-        const cardsData = {cards_json};
+        const KANBAN_API_BASE = "http://127.0.0.1:{int(_CHAT_SERVER_STATE.get('port') or 8765)}";
+        let cardsData = {cards_json};
+        let lastTasksSignature = '';
         let activeQuickFilter = null;
         let activeAssignee = null;
         let draggedCardId = null;
@@ -2547,8 +2561,63 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
           }}
         }});
 
+        async function syncKanbanWithBackend() {{
+          try {{
+            const resp = await fetch(KANBAN_API_BASE + '/api/tasks');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            const tasks = data.tasks || [];
+            const sig = JSON.stringify(tasks);
+            if (sig === lastTasksSignature) return;
+            lastTasksSignature = sig;
+
+            const nonBaseline = cardsData.filter(c => c.alignment !== 'BASELINE');
+            const mappedBaseline = tasks.map(b => {{
+              const stLow = (b.status || '').toLowerCase();
+              const col = stLow.includes('progress') ? 'prog' : (stLow.includes('done') ? 'done' : (stLow.includes('review') || stLow.includes('hitl') ? 'hitl' : 'todo'));
+              return {{
+                id: b.id,
+                title: b.title,
+                column: col,
+                issue_type: 'task',
+                alignment: 'BASELINE',
+                priority: b.priority || 'P1 - High',
+                points: 3,
+                category: (b.category || 'FINTECH BASELINE').toUpperCase(),
+                assignee: {{ name: 'Platform Team', initials: 'PT', color: '#059669' }},
+                confidence: 100,
+                requires_hitl: false,
+                related_ids: [b.id],
+                user_story: `Backlog Ticket (${{b.id}}) — Current Status: ${{b.status}}`,
+                technical_description: b.summary || '',
+                priority_rationale: `Backlog ticket with priority ${{b.priority}}.`,
+                alignment_notes: 'Synced live via fde-backlog-stdio + FDE Task CRUD API.',
+                acceptance_criteria: [
+                  `Tracked in data/existing_backlog.json (${{b.id}}).`,
+                  'Used by Subagent 3 (backlog-auditor) as ground-truth deduplication anchor.',
+                  `Current status: ${{b.status}}.`
+                ],
+                comments: [{{ author: 'FDE Task Agent', initials: 'FA', color: '#059669', time: 'Live Sync', text: `Status: ${{b.status}} • Priority: ${{b.priority}}` }}]
+              }};
+            }});
+
+            cardsData = nonBaseline.concat(mappedBaseline);
+            renderAvatarFilters();
+            renderBoard();
+          }} catch (e) {{}}
+        }}
+
+        try {{
+          const bc = new BroadcastChannel('fde_backlog_sync');
+          bc.onmessage = () => syncKanbanWithBackend();
+        }} catch (e) {{}}
+        window.addEventListener('focus', syncKanbanWithBackend);
+        document.addEventListener('visibilitychange', () => {{ if (!document.hidden) syncKanbanWithBackend(); }});
+        setInterval(syncKanbanWithBackend, 2500);
+
         renderAvatarFilters();
         renderBoard();
+        syncKanbanWithBackend();
       </script>
     </body>
     </html>
