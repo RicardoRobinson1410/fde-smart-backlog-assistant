@@ -54,5 +54,13 @@
     "priority": "P1 - High",
     "category": "Feature",
     "summary": "Create a new task as requested."
+  },
+  {
+    "id": "FIN-108",
+    "title": "Create monitoring center",
+    "status": "To Do",
+    "priority": "P1 - High",
+    "category": "Infrastructure",
+    "summary": "Develop a new monitoring center for system oversight."
   }
 ]

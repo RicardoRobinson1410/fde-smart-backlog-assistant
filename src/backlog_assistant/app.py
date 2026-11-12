@@ -441,7 +441,8 @@ def _detect_task_action_intent(
                 '"status": "To Do"|"In Progress"|"In Review / HITL"|"Done" or "To Do" for create, '
                 '"priority": "P0 - Critical"|"P1 - High"|"P2 - Medium" or "P1 - High" for create, '
                 '"category": "Feature"|"Security"|"Infrastructure"|"Observability", '
-                '"summary": "Clear 1-sentence engineering summary"}\n'
+                '"summary": "Detailed 2-3 sentence FDE engineering description covering objective, implementation scope, and testable acceptance criteria", '
+                '"missing_details": ["list of any critical clarifying questions if the request is too vague, else []"]}\n'
                 f"Existing backlog IDs: {[b.get('id') for b in backlog]}"
             )
             req_body = json.dumps({
@@ -489,15 +490,21 @@ def _detect_task_action_intent(
         return {"is_task_command": True, "op": "update", "id": target_id, "priority": pri, "status": status}
     if any(w in q_low for w in ["create", "add task", "new task", "add ticket", "new ticket", "need a task", "need a new task", "make a task"]):
         clean_title = re.sub(r"^(i\s+need\s+a\s+new\s+task\s+for\s+|create\s+(a\s+)?(new\s+)?(p[0-2]\s+)?(critical\s+)?(task|ticket|story)\s*(to|for|:)?\s*|add\s+(a\s+)?(new\s+)?(task|ticket)\s*(to|for|:)?\s*)", "", q, flags=re.IGNORECASE).strip()
+        final_title = clean_title[:90].capitalize() or "New Engineering Task"
+        final_cat = "Security" if ("pci" in q_low or "security" in q_low) else ("Observability" if "monitor" in q_low else "Feature")
         return {
             "is_task_command": True,
             "op": "create",
             "id": target_id,
-            "title": clean_title[:90].capitalize() or "New Engineering Task",
+            "title": final_title,
             "status": status or "To Do",
             "priority": pri or "P1 - High",
-            "category": "Security" if ("pci" in q_low or "security" in q_low) else ("Observability" if "monitor" in q_low else "Feature"),
-            "summary": q,
+            "category": final_cat,
+            "summary": (
+                f"Objective: {final_title}. Scope: Design and implement {final_title.lower()} within the {final_cat} domain, "
+                "including automated verification tests, PII/security guardrails, and structured audit logging to outputs/audit_trail.jsonl."
+            ),
+            "missing_details": [],
         }
     return None
 
@@ -1681,12 +1688,15 @@ def render_chatgpt_conversational_first_tab(
                       <span class="tag t-con">${{(a.op || '').toUpperCase()}} • CRITICAL GATE</span>
                     </div>
                     <div style="font-size:12.5px; color:#e5e5e5; margin-bottom:8px;"><strong>Risk Reason:</strong> ${{plan.risk_reason}}</div>
-                    <div style="background:#0d0d0d; border:1px solid #2b2b2b; border-radius:8px; padding:9px 11px; font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#93c5fd; margin-bottom:10px;">
+                    <div style="background:#0d0d0d; border:1px solid #2b2b2b; border-radius:8px; padding:9px 11px; font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#93c5fd; margin-bottom:10px; line-height:1.5;">
                       Target Ticket: ${{a.id || 'NEW'}}<br/>
                       ${{a.title ? 'Title: ' + a.title + '<br/>' : ''}}
+                      ${{a.category ? 'Category: ' + a.category + '<br/>' : ''}}
                       ${{a.status ? 'Target Status: ' + a.status + '<br/>' : ''}}
-                      ${{a.priority ? 'Priority: ' + a.priority : ''}}
+                      ${{a.priority ? 'Priority: ' + a.priority + '<br/>' : ''}}
+                      ${{a.summary ? 'Description: ' + a.summary : ''}}
                     </div>
+                    <div style="font-size:11.5px; color:#9ca3af; margin-bottom:10px;">Review the drafted details above. Click <strong>Approve &amp; Execute</strong> to persist, or reply in chat to refine priority, category, or scope.</div>
                     <div style="display:flex; gap:10px;">
                       <button onclick="resolveHitlAction('${{hId}}', true)" style="background:#10a37f; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer;">✅ Approve &amp; Execute</button>
                       <button onclick="resolveHitlAction('${{hId}}', false)" style="background:#374151; color:#e5e5e5; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer;">❌ Reject</button>
