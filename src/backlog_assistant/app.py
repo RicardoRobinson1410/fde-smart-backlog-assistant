@@ -3628,11 +3628,25 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
                 if ch.grader == "code"
             ],
             "judge": judge_obj,
-            "tech": {
-                "meta": f"Run {run.run_id} • Agent {run.agent_model} • Judge {run.judge_model or 'off'} • {c.metrics.latency_ms} ms • {c.metrics.input_tokens}/{c.metrics.output_tokens} tokens",
-                "system_prompt": c.system_prompt,
-                "user_prompt": c.user_prompt,
-                "raw_json": json.dumps(out, indent=2, ensure_ascii=False),
+            "thinking": {
+                "meta": f"Model: {run.agent_model} • Latency: {c.metrics.latency_ms} ms • Tokens: {c.metrics.input_tokens} in / {c.metrics.output_tokens} out",
+                "exec_summary": summ.get("executive_summary", ""),
+                "risks": summ.get("risks_and_dependencies", []),
+                "open_questions": summ.get("open_questions", []),
+                "story_decisions": [
+                    {
+                        "id": st.get("id", ""),
+                        "title": st.get("title", ""),
+                        "priority": st.get("priority", ""),
+                        "priority_rationale": st.get("priority_rationale", ""),
+                        "alignment": st.get("backlog_alignment", ""),
+                        "refs": st.get("related_backlog_ids", []),
+                        "alignment_notes": st.get("alignment_notes", ""),
+                        "confidence": int(float(st.get("confidence_score", 0.9)) * 100),
+                        "hitl": bool(st.get("requires_human_approval", False)),
+                    }
+                    for st in stories
+                ],
             },
         })
 
@@ -3901,14 +3915,31 @@ function openModal(idx) {{
       </div>
     </div>
     <details>
-      <summary>🔧 Technical Details (Prompts & Raw JSON)</summary>
-      <div style="margin:8px 0;color:#94a3b8;font-size:12px;">${{esc(c.tech.meta)}}</div>
-      <div style="font-weight:600;margin:6px 0 4px 0;">System Prompt</div>
-      <div class="pre-box">${{esc(c.tech.system_prompt)}}</div>
-      <div style="font-weight:600;margin:8px 0 4px 0;">User Prompt</div>
-      <div class="pre-box">${{esc(c.tech.user_prompt)}}</div>
-      <div style="font-weight:600;margin:8px 0 4px 0;">Raw JSON Output</div>
-      <div class="pre-box">${{esc(c.tech.raw_json)}}</div>
+      <summary>🧠 Agent Thinking Process (Step-by-Step Reasoning)</summary>
+      <div style="margin:8px 0 10px 0;color:#94a3b8;font-size:12px;">${{esc(c.thinking.meta)}}</div>
+      <div style="display:grid;gap:8px;font-size:12.5px;">
+        <div style="background:#121215;border:1px solid #27272a;border-radius:8px;padding:10px;">
+          <strong>1. Ingestion & Privacy Shield:</strong>
+          ${{c.pii_redacted > 0 ? `Masked ${{c.pii_redacted}} sensitive item(s) locally before calling the LLM.` : "No PII or secrets detected; passed document cleanly to the extractor."}}
+        </div>
+        <div style="background:#121215;border:1px solid #27272a;border-radius:8px;padding:10px;">
+          <strong>2. Synthesis & Anti-Hallucination:</strong>
+          <div style="margin-top:4px;color:#cbd5e1;">${{esc(c.thinking.exec_summary || "No executive summary returned.")}}</div>
+          ${{c.thinking.open_questions.length ? `<div style="margin-top:6px;color:#94a3b8;"><em>Flagged as ambiguous instead of guessing:</em><ul>${{c.thinking.open_questions.map(q => `<li>${{esc(q)}}</li>`).join("")}}</ul></div>` : ""}}
+          ${{c.thinking.risks.length ? `<div style="margin-top:6px;color:#94a3b8;"><em>Identified risks:</em><ul>${{c.thinking.risks.map(r => `<li>${{esc(r)}}</li>`).join("")}}</ul></div>` : ""}}
+        </div>
+        <div style="background:#121215;border:1px solid #27272a;border-radius:8px;padding:10px;">
+          <strong>3. Backlog Deduplication, Priority & Security Decisions:</strong>
+          ${{c.thinking.story_decisions.length ? c.thinking.story_decisions.map(sd => `
+            <div style="margin-top:8px;padding-top:8px;border-top:1px solid #222;">
+              <div><strong>${{esc(sd.id)}} — ${{esc(sd.title)}}</strong></div>
+              <div style="color:#cbd5e1;margin-top:3px;">• <strong>Alignment (<code>${{esc(sd.alignment)}}</code>${{sd.refs.length ? ` → ${{esc(sd.refs.join(", "))}}` : ""}}):</strong> ${{esc(sd.alignment_notes || "No overlap notes provided.")}}</div>
+              <div style="color:#cbd5e1;margin-top:2px;">• <strong>Priority (<code>${{esc(sd.priority)}}</code>):</strong> ${{esc(sd.priority_rationale || "No rationale provided.")}}</div>
+              <div style="color:#94a3b8;margin-top:2px;">• <strong>Security Gate:</strong> Confidence ${{sd.confidence}}% — ${{sd.hitl ? "🚨 Escalated for Human-in-the-Loop approval" : "✅ Auto-approved"}}</div>
+            </div>
+          `).join("") : '<div style="margin-top:6px;color:#94a3b8;">Decided not to extract any stories from this input.</div>'}}
+        </div>
+      </div>
     </details>
   `;
   document.getElementById("caseModal").classList.add("open");
