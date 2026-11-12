@@ -5,16 +5,16 @@ Use this guide during your 1-hour interview with the Accenture RDE Global Counci
 ---
 
 ## 1. 60-Second Elevator Pitch
-> *"For my Hands-On Project, I built a **Configurable FDE Smart Backlog Assistant**. In real client engagements, FDEs constantly switch domains—from FinTech sprint planning to SRE incident postmortems or PCI compliance audits. Instead of hardcoding prompts for one narrow sample, I designed a **scenario-driven architecture** (`ScenarioConfig`) within a clean ~440-LOC Python package. It ingests `.txt`, `.md`, and `.pdf` specs, cross-references them against an existing JSON backlog or live GitHub Issues, and uses OpenAI Structured Outputs with Pydantic v2 guardrails to produce deduplicated user stories (`NEW`, `UPDATES_EXISTING`, `DUPLICATE`, `CONFLICT`) while routing missing specs into `open_questions` to prevent hallucination."*
+> *"For my Hands-On Project, I built a **Configurable FDE Smart Backlog Assistant**. In real client engagements, FDEs constantly switch domains—from FinTech sprint planning to SRE incident postmortems or PCI compliance audits. Instead of hardcoding prompts for one narrow sample, I designed a **scenario-driven architecture** (`ScenarioConfig`) with a clean ~690-LOC core Python package (`config.py`, `models.py`, `parser.py`, `prompts.py`, `engine.py`, `cli.py`) plus an automated 12-case evaluation harness and an 8-tab Streamlit FDE Portal. It ingests `.txt`, `.md`, and `.pdf` specs, redacts PII/secrets locally, cross-references them against an existing JSON backlog, and uses a 4-node LangGraph workflow with `ChatOpenAI.with_structured_output` and Pydantic v2 guardrails to produce deduplicated user stories (`NEW`, `UPDATES_EXISTING`, `DUPLICATE`, `CONFLICT`) while routing missing specs into `open_questions` to prevent hallucination."*
 
 ---
 
 ## 2. Live Demo Script (3 Minutes)
 1. **Show the Golden Evaluation Scorecard (30s)**:
    ```powershell
-   python -m backlog_assistant.cli evaluate
+   python -m backlog_assistant.cli evaluate --offline
    ```
-   *Highlight*: Point out how all 3 realistic scenarios pass `>= 3 Acceptance Criteria`, catch the duplicate (`FIN-101`), update existing scope (`FIN-104`, `FIN-105`), and flag the PCI encryption conflict (`FIN-106`).
+   *Highlight*: Point out how the 12-case golden dataset tests extraction, deduplication (`FIN-101`), scope updates (`FIN-104`, `FIN-105`), conflict detection (`FIN-106`), PII redaction, prompt-injection resistance, and anti-hallucination.
 2. **Demonstrate Live Variable Adaptation (60s)**:
    ```powershell
    python -m backlog_assistant.cli analyze data/samples/02_incident_postmortem.md `
@@ -32,8 +32,8 @@ Use this guide during your 1-hour interview with the Accenture RDE Global Counci
 
 ## 3. High-Probability Council Questions & Model Answers
 
-### Q1: "Why did you use OpenAI Structured Outputs + Pydantic v2 instead of just asking for JSON in the prompt?"
-- **Answer**: Prompt-only JSON instructions fail in production when documents contain unescaped quotes or when the model omits required fields. Using `client.beta.chat.completions.parse` with a Pydantic v2 schema enforces grammar-constrained decoding at the token level, and our custom `@field_validator` guarantees business invariants (such as $\ge 3$ non-empty testable acceptance criteria).
+### Q1: "Why did you use Structured Outputs + Pydantic v2 instead of just asking for JSON in the prompt?"
+- **Answer**: Prompt-only JSON instructions fail in production when documents contain unescaped quotes or when the model omits required fields. Using `ChatOpenAI.with_structured_output(LLMExtractionPayload)` with a Pydantic v2 schema enforces schema-constrained outputs, and our custom `@field_validator` guarantees business invariants (such as $\ge 3$ non-empty testable acceptance criteria).
 
 ### Q2: "How does your solution prevent hallucinations when input notes are incomplete?"
 - **Answer**: LLMs naturally try to 'fill in the blanks' (e.g., inventing a 7-year retention period or a 100ms latency SLA when none was stated). In `prompts.py` (`v3.0-fde-configurable`), we explicitly provide a dedicated schema sink (`summary.open_questions`) and instruct the model never to invent unstated non-functional requirements.

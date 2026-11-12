@@ -32,19 +32,19 @@ flowchart LR
 
     subgraph Inputs["Ingestion (parser.py)"]
         Docs["Notes (.txt/.md) & Specs (.pdf)"]
-        Backlog["existing_backlog.json\nor Live GitHub Issues"]
+        Backlog["Project Backlog JSON\n(existing_backlog.json)"]
     end
 
     subgraph Core["AI & Guardrail Core (prompts.py, engine.py, models.py)"]
         Prompt["Dynamic Prompt Compiler (v3.0-fde)"]
-        LLM["OpenAI Structured Outputs\n+ Offline Deterministic Fallback"]
+        LLM["LangGraph + ChatOpenAI Structured Outputs\n+ Offline Deterministic Fallback"]
         Pydantic["Pydantic v2 Schema Guardrails\n(>=3 Testable ACs + Dedup Enum)"]
     end
 
-    subgraph Delivery["Interfaces (cli.py & app.py)"]
-        CLI["Rich CLI + Golden Evaluator"]
-        UI["Streamlit Workbench + Variable Editor"]
-        GH["GitHub Issues Exporter (gh CLI)"]
+    subgraph Delivery["Interfaces (cli.py, evaluation.py, app.py)"]
+        CLI["Rich CLI + Evaluation Harness"]
+        UI["8-Tab FDE Streamlit Portal"]
+        Audit["Project-Scoped JSONL Audit & Reports"]
     end
 
     SC --> Prompt
@@ -55,7 +55,7 @@ flowchart LR
     LLM --> Pydantic
     Pydantic --> CLI
     Pydantic --> UI
-    Pydantic --> GH
+    Pydantic --> Audit
 ```
 
 ### Adapting to Any New Scenario in Seconds
@@ -105,18 +105,17 @@ python -m backlog_assistant.cli analyze data/samples/02_incident_postmortem.md `
   --config config/presets/incident_triage_scenario.json `
   --set id_prefix=SRE --set "domain_name=Payment Gateway Reliability"
 
-# 5. Connect with Live GitHub Issues (pull open issues as context + dry-run issue export)
-python -m backlog_assistant.cli analyze data/samples/01_sprint_planning_notes.txt `
-  --github-repo RicardoRobinson1410/fde-smart-backlog-assistant --export-github
+# 5. Run in offline deterministic replay mode (zero API key required)
+python -m backlog_assistant.cli analyze data/samples/01_sprint_planning_notes.txt --offline
 ```
 
 ### Run Golden Evaluation Scorecard & Automated Tests (Required Step 3)
 ```powershell
-# Run the 3-scenario Golden Rubric Scorecard table
-python -m backlog_assistant.cli evaluate
+# Run the 12-case Golden Evaluation Suite (offline deterministic baseline)
+python -m backlog_assistant.cli evaluate --offline
 
-# Run the 12-case Golden Evaluation Suite (offline baseline or live + AI Judge)
-python -m backlog_assistant.evaluation --offline
+# Run the 12-case Golden Evaluation Suite (Live OpenAI + AI Judge, requires OPENAI_API_KEY)
+python -m backlog_assistant.cli evaluate
 
 # Run the automated pytest verification suite (18 tests)
 python -m pytest -v

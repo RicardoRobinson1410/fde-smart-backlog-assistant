@@ -23,7 +23,7 @@ This document fulfills **Required Steps 1, 2, 3, and 5** of the Certified-Level 
   1. **Externalized Scenario Variables (`ScenarioConfig`)**: Dynamically injects `agent_role`, `domain_name`, `output_item_label`, `id_prefix`, `story_template`, `categories`, and `priority_rubric` from JSON configuration.
   2. **4-State Backlog Alignment Classification**: Forces the model to compare every extracted requirement against the injected `existing_backlog.json` (or live GitHub Issues) and classify it as `NEW`, `UPDATES_EXISTING`, `DUPLICATE`, or `CONFLICT` with explicit `related_backlog_ids`.
   3. **Anti-Hallucination Escape Hatch (`summary.open_questions`)**: Explicitly instructs the model to route missing SLAs, retention windows, or architectural ambiguities into `open_questions` rather than guessing.
-  4. **Pydantic v2 Structural Enforcement**: Paired with OpenAI Structured Outputs (`client.beta.chat.completions.parse`) and a Pydantic `@field_validator` enforcing $\ge 3$ non-empty, testable acceptance criteria per item.
+  4. **Pydantic v2 Structural Enforcement**: Paired with LangChain/OpenAI Structured Outputs (`ChatOpenAI.with_structured_output(LLMExtractionPayload)`) inside a 4-node LangGraph `StateGraph` (`ingest_node` $\rightarrow$ `extractor_agent` $\rightarrow$ `backlog_auditor` $\rightarrow$ `security_reviewer`) and a Pydantic `@field_validator` enforcing $\ge 3$ non-empty, testable acceptance criteria per item.
 
 ---
 
@@ -39,7 +39,7 @@ Per the Job Aid constraint (*"Show how AI was used in your development process"*
 ## 3. Reflection: What Worked Well & Future Improvements
 
 ### What Worked Well
-- **Scenario Parameterization (`ScenarioConfig`)**: Decoupling domain variables into `config/scenario_config.json` and `config/presets/incident_triage_scenario.json` allowed the exact same 440-LOC codebase to serve both Agile Product Backlog management and SRE Incident Postmortem triage.
+- **Scenario Parameterization (`ScenarioConfig`)**: Decoupling domain variables into `config/scenario_config.json` and `config/presets/incident_triage_scenario.json` allowed the exact same ~690-LOC core engine (`config.py`, `models.py`, `parser.py`, `prompts.py`, `engine.py`, `cli.py`) to serve both Agile Product Backlog management and SRE Incident Postmortem triage, alongside the optional evaluation harness (`evaluation.py`) and 8-tab Streamlit FDE Portal (`app.py`).
 - **Dual Execution Mode (Live OpenAI + Deterministic Offline Replay)**: Reviewers can run `pytest` and the CLI evaluator in under 2 seconds without needing an API key, while live API calls benefit from schema-enforced Structured Outputs and exponential backoff.
 
 ### What We Would Improve for Production Scale
