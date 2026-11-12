@@ -3496,6 +3496,44 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
             st.session_state["eval_selected_run"] = new_run.run_id
             st.success(f"Finished: {new_run.summary.passed} / {new_run.summary.total_cases} tests passed.")
 
+    with st.expander(f"📚 Preview Evaluation Set ({len(dataset.cases)} Test Cases — Before Running)", expanded=False):
+        st.caption(
+            f"Source: `evals/golden_dataset.json` (v{dataset.dataset_version}) • "
+            f"Frozen backlog fixture: `{dataset.backlog_fixture}`"
+        )
+        st.dataframe(
+            [
+                {
+                    "ID": dc.id,
+                    "Test Case": dc.name,
+                    "Category": dc.category,
+                    "Why We Test This": dc.why_it_matters,
+                    "Expected Stories": f"{dc.expectations['story_count'][0]}–{dc.expectations['story_count'][1]}"
+                    if "story_count" in dc.expectations
+                    else "—",
+                }
+                for dc in dataset.cases
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+        preview_map = {dc.id: dc for dc in dataset.cases}
+        prev_id = st.selectbox(
+            "Inspect a case from the dataset",
+            [dc.id for dc in dataset.cases],
+            format_func=lambda cid: f"{cid} — {preview_map[cid].name} ({preview_map[cid].category})",
+            key="eval_preview_case_id",
+        )
+        pdc = preview_map[prev_id]
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            st.markdown("**📄 Input Document**")
+            st.text_area("Document", value=pdc.document, height=180, disabled=True, key=f"prev_doc_{pdc.id}")
+        with pc2:
+            st.markdown("**🎯 What Should Happen**")
+            st.info(pdc.reference_notes)
+            st.caption(f"Format: `.{pdc.source_format}` • Checks: {', '.join(pdc.expectations.keys())}")
+
     # ---------------- Run Selection ----------------
     run_files = ev.list_runs()
     if not run_files:
