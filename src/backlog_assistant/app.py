@@ -906,35 +906,36 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                 cur_cfg = _CHAT_SERVER_STATE["cfg"]
                 audit_rows = load_audit_history(cur_cfg.paths.audit_log_path)
                 total_tokens = sum(int(r.get("estimated_tokens", 0) or 0) for r in audit_rows)
-                total_cost = 0.0
-                for r in audit_rows:
-                    r_tok = int(r.get("estimated_tokens", 0) or 0)
-                    r_cost = float(r.get("estimated_cost_usd", 0.0) or 0.0)
-                    total_cost += r_cost if r_cost > 0 else (r_tok / 1_000_000.0) * 0.22
-                doc_runs = sum(1 for r in audit_rows if r.get("estimated_tokens"))
-                naive_cost = max(doc_runs * 0.00620, (total_tokens / 1650.0) * 0.00620)
-                saved_usd = max(0.0, naive_cost - total_cost)
+                actual_cost = sum(float(r.get("estimated_cost_usd", 0.0) or 0.0) for r in audit_rows)
+                live_tokens = sum(
+                    int(r.get("estimated_tokens", 0) or 0)
+                    for r in audit_rows
+                    if float(r.get("estimated_cost_usd", 0.0) or 0.0) > 0
+                )
+                naive_live_cost = (live_tokens * 3.85) / 1_000_000.0 if live_tokens > 0 else 0.0
+                saved_usd = max(0.0, naive_live_cost - actual_cost)
                 recent = []
-                for r in reversed(audit_rows[-8:]):
+                for r in reversed(audit_rows[-10:]):
                     r_tok = int(r.get("estimated_tokens", 0) or 0)
                     r_cost = float(r.get("estimated_cost_usd", 0.0) or 0.0)
-                    eff_cost = r_cost if r_cost > 0 else (r_tok / 1_000_000.0) * 0.22
                     ts_raw = str(r.get("timestamp_utc") or r.get("timestamp") or "")
                     lbl_raw = str(r.get("source_file") or r.get("document_name") or r.get("event_type") or "pipeline_event")
                     tkt_raw = str(r.get("ticket_id") or f"{int(r.get('stories_generated', r.get('story_count', 0)) or 0)} stories")
+                    mode_raw = str(r.get("execution_mode") or ("live_openai" if r_cost > 0 else "local_audit"))
                     recent.append({
                         "timestamp": ts_raw[:19].replace("T", " ") or "-",
                         "label": lbl_raw,
                         "ticket": tkt_raw,
+                        "mode": mode_raw,
                         "tokens": r_tok,
-                        "cost": round(eff_cost, 6),
+                        "cost": round(r_cost, 6),
                     })
                 self._send_json(200, {
                     "total_events": len(audit_rows),
-                    "doc_runs": doc_runs,
                     "total_tokens": total_tokens,
-                    "total_cost_usd": round(total_cost, 6),
-                    "naive_cost_usd": round(naive_cost, 6),
+                    "live_tokens": live_tokens,
+                    "total_cost_usd": round(actual_cost, 6),
+                    "naive_cost_usd": round(naive_live_cost, 6),
                     "saved_usd": round(saved_usd, 6),
                     "recent": recent,
                 })
@@ -3280,97 +3281,8 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 unsafe_allow_html=True,
             )
 
-    st.markdown("#### 🛡️ FinOps Circuit Breakers & Realistic Volume Simulator")
-    calc_col, chart_col = st.columns([1.25, 1.75])
-
-    avg_tok = max(800, int(latest.metadata.estimated_tokens or 1650))
-    avg_in = int(avg_tok * 0.82)
-    avg_out = avg_tok - avg_in
-
-    with calc_col:
-        vol = st.slider("📄 Monthly Document Volume:", min_value=100, max_value=50000, value=5000, step=500)
-        esc_pct = st.slider("🛡️ Stage 4 Security Gate Escalation (% hitting gpt-4o):", min_value=0, max_value=100, value=15, step=5)
-        budget_cap = st.slider("🚨 Monthly Hard Circuit-Breaker Cap ($ USD):", min_value=5.0, max_value=200.0, value=25.0, step=5.0)
-        naive_per_doc = (avg_in * 2.50 + avg_out * 10.00) / 1_000_000.0
-        mini_per_doc = (avg_in * 0.15 + avg_out * 0.60) / 1_000_000.0
-        sec_gate_per_hit = (250 * 2.50 + 80 * 10.00) / 1_000_000.0
-        tiered_per_doc = mini_per_doc + (esc_pct / 100.0) * sec_gate_per_hit
-        savings_pct = round(max(0.0, (1.0 - tiered_per_doc / max(1e-9, naive_per_doc)) * 100.0), 1)
-        bar_pct = max(2, min(100, round(100.0 - savings_pct)))
-
-        naive_monthly = round(vol * naive_per_doc, 2)
-        tiered_monthly = round(vol * tiered_per_doc, 2)
-        monthly_saved = round(naive_monthly - tiered_monthly, 2)
-        annual_saved = round(monthly_saved * 12, 2)
-        cost_per_ticket = round(tiered_per_doc / max(1, len(latest.stories)), 5)
-        budget_pct = min(100, int((tiered_monthly / max(0.01, budget_cap)) * 100))
-        breaker_status = (
-            "✅ HEALTHY (Within FinOps Budget Cap)"
-            if tiered_monthly <= budget_cap
-            else "🛑 CIRCUIT BREAKER TRIPPED (Auto-Downgrading All Nodes to gpt-4o-mini)"
-        )
-
-        st.markdown(
-            "\n".join(line.strip() for line in f"""
-            <div style="background:#141414; border-radius:14px; padding:16px; border:1px solid #2a2a2a;">
-                <div style="font-weight:700; font-size:0.94rem; margin-bottom:8px;">🧾 Unit Economics ({vol:,} docs/mo × ~{avg_tok:,} tokens/doc • {esc_pct}% gpt-4o gate)</div>
-                <div style="font-size:0.84rem; line-height:1.7; color:#cbd5e1;">
-                    • <strong>Naive Single-Model (100% gpt-4o):</strong> <code>${naive_per_doc:.5f}/doc</code> × {vol:,} = <strong style="color:#f43f5e;">${naive_monthly:,.2f} / month</strong><br>
-                    • <strong>Our Tiered Subagent Router:</strong> <code>${tiered_per_doc:.5f}/doc</code> × {vol:,} = <strong style="color:#10a37f;">${tiered_monthly:,.2f} / month</strong><br>
-                    • <strong>Cost per Extracted User Story:</strong> <code>${cost_per_ticket:.5f} / ticket</code><br>
-                    • <strong>Monthly Net Savings:</strong> <strong style="color:#10a37f;">${monthly_saved:,.2f} saved / mo ({savings_pct:.1f}% reduction)</strong><br>
-                    • <strong>Projected Annual Savings:</strong> <strong style="color:#93c5fd;">${annual_saved:,.2f} saved / year</strong><br>
-                    • <strong>Circuit Breaker ({budget_pct}% of ${budget_cap:.0f}):</strong> <code>{breaker_status}</code>
-                </div>
-            </div>
-            """.splitlines()),
-            unsafe_allow_html=True,
-        )
-
-    with chart_col:
-        naive_1k = 1000 * naive_per_doc
-        tiered_1k = 1000 * tiered_per_doc
-        naive_yr = naive_monthly * 12
-        tiered_yr = tiered_monthly * 12
-
-        chart_html = "\n".join(line.strip() for line in f"""
-        <div style="background:#141414; border-radius:14px; padding:18px; border:1px solid #2a2a2a; height:100%;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
-                <div style="font-weight:700; font-size:0.94rem; color:#ffffff;">📊 Cost Comparison: Naive All-gpt-4o vs. Tiered Router</div>
-                <div style="font-size:0.78rem; color:#cbd5e1;">
-                    <span style="color:#f43f5e; font-weight:700;">■ Naive All-gpt-4o</span> &nbsp;&nbsp;
-                    <span style="color:#10a37f; font-weight:700;">■ Our Tiered Router ({savings_pct:.1f}% Saved)</span>
-                </div>
-            </div>
-            <div style="margin-bottom:14px;">
-                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
-                    <span><strong>Per 1,000 Documents</strong></span>
-                    <span><strong style="color:#f43f5e;">${naive_1k:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_1k:,.2f}</strong></span>
-                </div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:{bar_pct}%; height:100%;"></div></div>
-            </div>
-            <div style="margin-bottom:14px;">
-                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
-                    <span><strong>Monthly ({vol:,} Docs)</strong></span>
-                    <span><strong style="color:#f43f5e;">${naive_monthly:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_monthly:,.2f}</strong></span>
-                </div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:{bar_pct}%; height:100%;"></div></div>
-            </div>
-            <div>
-                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
-                    <span><strong>Annual ({vol*12:,} Docs)</strong></span>
-                    <span><strong style="color:#f43f5e;">${naive_yr:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_yr:,.2f}</strong></span>
-                </div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
-                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:{bar_pct}%; height:100%;"></div></div>
-            </div>
-        </div>
-        """.splitlines())
-        st.markdown(chart_html, unsafe_allow_html=True)
-
-    st.markdown("#### 📡 Real-Time Cost & Token Monitor (Live Telemetry)")
+    st.markdown("#### 📡 Real-Time Cost, Token & Circuit-Breaker Monitor (Live Telemetry)")
+    budget_cap = st.slider("🚨 Hard Spend Circuit-Breaker Cap ($ USD):", min_value=1.0, max_value=100.0, value=10.0, step=1.0)
     finops_port = int(_CHAT_SERVER_STATE.get("port") or 8765)
     live_monitor_html = f"""
     <!DOCTYPE html>
@@ -3382,6 +3294,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         .kpi {{ background:#141414; border:1px solid #2a2a2a; border-radius:12px; padding:12px 14px; }}
         .lbl {{ font-size:11px; color:#9ca3af; text-transform:uppercase; font-weight:700; letter-spacing:.03em; }}
         .val {{ font-size:20px; font-weight:800; color:#fff; margin-top:4px; }}
+        .sub {{ font-size:11px; color:#8e8e8e; margin-top:3px; }}
         .live-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:#10a37f; margin-right:6px; animation:pulse 1.5s infinite; }}
         @keyframes pulse {{ 0%,100%{{opacity:1;}} 50%{{opacity:.35;}} }}
         table {{ width:100%; border-collapse:collapse; background:#141414; border:1px solid #2a2a2a; border-radius:10px; overflow:hidden; font-size:12px; }}
@@ -3392,40 +3305,64 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     </head>
     <body>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12px; color:#9ca3af;">
-        <span><span class="live-dot"></span>Streaming live from <code>outputs/audit_trail.jsonl</code> (auto-refresh 2s)</span>
+        <span><span class="live-dot"></span>Streaming actual observed telemetry from <code>outputs/audit_trail.jsonl</code> (auto-refresh 2s)</span>
         <span id="last-sync">Connecting...</span>
       </div>
       <div class="grid">
-        <div class="kpi"><div class="lbl">Live Spend (USD)</div><div class="val" id="k-cost" style="color:#10a37f;">$0.00000</div></div>
-        <div class="kpi"><div class="lbl">Live Tokens Used</div><div class="val" id="k-tok">0</div></div>
-        <div class="kpi"><div class="lbl">Saved vs. All-gpt-4o</div><div class="val" id="k-save" style="color:#93c5fd;">$0.00000</div></div>
-        <div class="kpi"><div class="lbl">Logged Runs / Events</div><div class="val" id="k-evt">0</div></div>
+        <div class="kpi">
+          <div class="lbl">Actual Spend (USD)</div>
+          <div class="val" id="k-cost" style="color:#10a37f;">$0.00000</div>
+          <div class="sub" id="k-cap">Cap: ${budget_cap:.2f} (HEALTHY)</div>
+        </div>
+        <div class="kpi">
+          <div class="lbl">Observed Tokens</div>
+          <div class="val" id="k-tok">0</div>
+          <div class="sub" id="k-live-tok">Live API tokens: 0</div>
+        </div>
+        <div class="kpi">
+          <div class="lbl">Saved vs. All-gpt-4o (Live)</div>
+          <div class="val" id="k-save" style="color:#93c5fd;">$0.00000</div>
+          <div class="sub" id="k-naive">Naive gpt-4o equiv: $0.00000</div>
+        </div>
+        <div class="kpi">
+          <div class="lbl">Logged Audit Events</div>
+          <div class="val" id="k-evt">0</div>
+          <div class="sub">Zero synthetic predictions</div>
+        </div>
       </div>
       <table>
-        <thead><tr><th>Timestamp</th><th>Document / Event</th><th>Scope / Ticket</th><th>Tokens</th><th>Cost (USD)</th></tr></thead>
-        <tbody id="finops-rows"><tr><td colspan="5" style="color:#8e8e8e;">Loading live telemetry...</td></tr></tbody>
+        <thead><tr><th>Timestamp (UTC)</th><th>Document / Event</th><th>Scope / Ticket</th><th>Mode</th><th>Tokens</th><th>Actual Cost (USD)</th></tr></thead>
+        <tbody id="finops-rows"><tr><td colspan="6" style="color:#8e8e8e;">Loading live telemetry...</td></tr></tbody>
       </table>
       <script>
+        const BUDGET_CAP = {budget_cap:.2f};
         async function pollFinops() {{
           try {{
             const resp = await fetch('http://127.0.0.1:{finops_port}/api/finops');
             if (!resp.ok) return;
             const d = await resp.json();
-            document.getElementById('k-cost').innerText = '$' + Number(d.total_cost_usd || 0).toFixed(5);
+            const actualCost = Number(d.total_cost_usd || 0);
+            document.getElementById('k-cost').innerText = '$' + actualCost.toFixed(5);
+            document.getElementById('k-cap').innerText = actualCost <= BUDGET_CAP
+              ? `Cap: $${{BUDGET_CAP.toFixed(2)}} (✅ HEALTHY)`
+              : `Cap: $${{BUDGET_CAP.toFixed(2)}} (🛑 TRIPPED)`;
             document.getElementById('k-tok').innerText = Number(d.total_tokens || 0).toLocaleString();
+            document.getElementById('k-live-tok').innerText = 'Live API tokens: ' + Number(d.live_tokens || 0).toLocaleString();
             document.getElementById('k-save').innerText = '$' + Number(d.saved_usd || 0).toFixed(5);
+            document.getElementById('k-naive').innerText = 'Naive gpt-4o equiv: $' + Number(d.naive_cost_usd || 0).toFixed(5);
             document.getElementById('k-evt').innerText = String(d.total_events || 0);
             document.getElementById('last-sync').innerText = 'Last updated: ' + new Date().toLocaleTimeString();
             const tbody = document.getElementById('finops-rows');
             const rows = d.recent || [];
             if (!rows.length) {{
-              tbody.innerHTML = '<tr><td colspan="5" style="color:#8e8e8e;">No telemetry events logged yet.</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="6" style="color:#8e8e8e;">No telemetry events logged yet.</td></tr>';
             }} else {{
               tbody.innerHTML = rows.map(r => `
                 <tr>
                   <td><code>${{r.timestamp || '-'}}</code></td>
                   <td>${{r.label}}</td>
                   <td><code>${{r.ticket}}</code></td>
+                  <td><code>${{r.mode || '-'}}</code></td>
                   <td>${{Number(r.tokens || 0).toLocaleString()}}</td>
                   <td style="color:#10a37f; font-weight:700;">$${{Number(r.cost || 0).toFixed(5)}}</td>
                 </tr>
@@ -3439,7 +3376,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     </body>
     </html>
     """
-    components.html(live_monitor_html, height=340, scrolling=True)
+    components.html(live_monitor_html, height=430, scrolling=True)
 
 
 def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
