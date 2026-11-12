@@ -4431,25 +4431,20 @@ def render_searchable_error_and_log_portal(
     m3.metric("PII Shield Events", cnt_pii)
     m4.metric("HITL & Task Actions", cnt_hitl)
 
-    f1, f2, f3 = st.columns([2.0, 1.5, 1.3])
+    f1, f2 = st.columns([2.2, 1.8])
     with f1:
         q = st.text_input(
             "🔍 Search logs",
-            placeholder="Search by ticket ID (FIN-104), filename, SHA-256, or keyword...",
+            placeholder="Search by ticket ID (FIN-104), SHA-256, or keyword...",
             key="logs_search",
         ).strip().lower()
     with f2:
         cats = ["Errors & Conflicts", "Security & PII", "HITL & Task Actions", "Healthy Runs"]
         sel_cats = st.multiselect("Filter Category", cats, default=cats, key="logs_cats")
-    with f3:
-        sources = ["All Sources"] + sorted({e["source_file"] for e in all_events if e["source_file"]})
-        sel_src = st.selectbox("Source", sources, key="logs_src")
 
     filtered = []
     for ev in all_events:
         if ev["category"] not in sel_cats:
-            continue
-        if sel_src != "All Sources" and ev["source_file"] != sel_src:
             continue
         if q and q not in json.dumps(ev, default=str).lower():
             continue
