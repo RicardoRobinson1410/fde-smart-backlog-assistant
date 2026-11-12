@@ -4397,28 +4397,16 @@ def render_searchable_error_and_log_portal(
     """Tab 7: Production FDE Observability, Security & Audit Log Explorer."""
     st.markdown("### 🚨 Production Audit, Security & Error Explorer")
     st.caption(
-        "Real-time observability backed by `outputs/audit_trail.jsonl`. Filter by severity, source, or keyword and "
+        "Real-time observability backed by `outputs/audit_trail.jsonl`. Filter by category or keyword and "
         "**click anywhere on any log row** to inspect its execution trace, SHA-256 provenance, and JSON payload."
     )
 
-    c_tog, c_exp = st.columns([2.2, 1.0])
-    with c_tog:
-        include_offline = st.checkbox(
-            "Include offline deterministic replay logs (test/cache runs)",
-            value=False,
-            key="logs_include_offline",
-        )
+    include_offline = st.checkbox(
+        "Include offline deterministic replay logs (test/cache runs)",
+        value=False,
+        key="logs_include_offline",
+    )
     all_events = build_unified_events(cfg, latest, history, include_offline=include_offline)
-
-    with c_exp:
-        st.download_button(
-            "⬇️ Export Filtered Logs (JSON)",
-            data=json.dumps(all_events, indent=2, default=str),
-            file_name="fde_audit_events.json",
-            mime="application/json",
-            width="stretch",
-            key="logs_export_btn",
-        )
 
     cnt_err = sum(1 for e in all_events if e["category"] == "Errors & Conflicts")
     cnt_pii = sum(1 for e in all_events if e["category"] == "Security & PII")
@@ -4431,24 +4419,48 @@ def render_searchable_error_and_log_portal(
     m3.metric("PII Shield Events", cnt_pii)
     m4.metric("HITL & Task Actions", cnt_hitl)
 
-    f1, f2 = st.columns([2.2, 1.8])
-    with f1:
+    cat_options = [
+        ("ALL", f"All ({len(all_events)})"),
+        ("Errors & Conflicts", f"🚨 Errors & Conflicts ({cnt_err})"),
+        ("Security & PII", f"🔒 Security & PII ({cnt_pii})"),
+        ("HITL & Task Actions", f"⚠️ HITL & Tasks ({cnt_hitl})"),
+        ("Healthy Runs", f"✅ Healthy Runs ({cnt_ok})"),
+    ]
+    cat_labels = {k: lbl for k, lbl in cat_options}
+    selected_cat_key = st.segmented_control(
+        "Filter by Category",
+        options=[k for k, _ in cat_options],
+        format_func=lambda k: cat_labels[k],
+        default="ALL",
+        key="logs_cat_pill",
+    ) or "ALL"
+
+    s_col, e_col = st.columns([3.0, 1.0])
+    with s_col:
         q = st.text_input(
             "🔍 Search logs",
             placeholder="Search by ticket ID (FIN-104), SHA-256, or keyword...",
             key="logs_search",
+            label_visibility="collapsed",
         ).strip().lower()
-    with f2:
-        cats = ["Errors & Conflicts", "Security & PII", "HITL & Task Actions", "Healthy Runs"]
-        sel_cats = st.multiselect("Filter Category", cats, default=cats, key="logs_cats")
 
     filtered = []
     for ev in all_events:
-        if ev["category"] not in sel_cats:
+        if selected_cat_key != "ALL" and ev["category"] != selected_cat_key:
             continue
         if q and q not in json.dumps(ev, default=str).lower():
             continue
         filtered.append(ev)
+
+    with e_col:
+        st.download_button(
+            f"⬇️ Export ({len(filtered)}) JSON",
+            data=json.dumps(filtered, indent=2, default=str),
+            file_name="fde_audit_events.json",
+            mime="application/json",
+            width="stretch",
+            key="logs_export_btn",
+        )
 
     if not filtered:
         st.info("No real production audit events match your current filters. Run a document analysis or task action to see live logs here.")
