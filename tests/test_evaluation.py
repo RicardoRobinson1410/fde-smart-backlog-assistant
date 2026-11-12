@@ -131,3 +131,4 @@ def test_regression_comparison():
     cur = EvalRun(run_id="b", started_at_utc="", mode="live_agent", agent_model="m", cases=[c_fail])
     assert compare_runs(prev, cur)["regressions"] == ["EV-001"]
     assert compare_runs(cur, prev)["fixes"] == ["EV-001"]
+

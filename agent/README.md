@@ -13,10 +13,15 @@ agent/
 ├── README.md                    # This architecture and evaluation guide
 ├── plugin.json                  # Antigravity / IDE plugin manifest
 ├── agents/                      # Main Agent Orchestration & Prompts
-│   ├── engine.py                # 4-node LangGraph StateGraph (Ingest -> Extractor -> Auditor -> Security Reviewer)
+│   ├── engine.py                # Lean (~90 lines) LangGraph StateGraph (Ingest -> Extractor -> Auditor -> Security Reviewer)
 │   ├── prompts.py               # Parameterized v3.0 prompt templates, CoT extraction & anti-hallucination guardrails
 │   ├── config.py                # ScenarioConfig loader (hot-swappable domain variables & rubric)
 │   └── scenario_config.json     # Default FinTech backlog configuration
+├── functions/                   # Modular Agent Node & Pipeline Functions
+│   ├── __init__.py              # Re-exports clean function interfaces
+│   ├── nodes.py                 # LangGraph individual node functions (ingest, extractor, auditor, security) + offline replay
+│   ├── llm_caller.py            # LangChain LCEL structured output invoker (ChatOpenAI.with_structured_output)
+│   └── finops.py                # Token cost estimation & immutable JSONL audit trail logging
 ├── subagents/                   # Specialized Subagent Manifests
 │   ├── backlog-auditor.md       # Subagent that compares extracted items against baseline IDs (NEW/UPDATE/DUP/CONFLICT)
 │   └── security-reviewer.md     # Subagent that audits P0 blast radius, encryption & PCI compliance for HITL approval

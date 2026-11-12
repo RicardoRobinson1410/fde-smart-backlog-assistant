@@ -25,12 +25,16 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import backlog_assistant.config as _cfg_mod
-import backlog_assistant.engine as _eng_mod
 import backlog_assistant.models as _mod_mod
 import backlog_assistant.parser as _par_mod
 import backlog_assistant.prompts as _prm_mod
+import backlog_assistant.functions.nodes as _fn_nodes_mod
+import backlog_assistant.functions.llm_caller as _fn_llm_mod
+import backlog_assistant.functions.finops as _fn_fin_mod
+import backlog_assistant.functions as _fn_mod
+import backlog_assistant.engine as _eng_mod
 
-for _m in (_cfg_mod, _mod_mod, _par_mod, _prm_mod, _eng_mod):
+for _m in (_cfg_mod, _mod_mod, _par_mod, _prm_mod, _fn_nodes_mod, _fn_llm_mod, _fn_fin_mod, _fn_mod, _eng_mod):
     importlib.reload(_m)
 
 from backlog_assistant.config import ScenarioConfig, load_scenario_config
