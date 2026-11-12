@@ -1289,7 +1289,7 @@ def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
                         • <strong>Acceptance Criteria:</strong> {total_acs} total ACs (100% &ge;3 per story)<br>
                         • <strong>Backlog Alignments:</strong> <code>{aligns}</code><br>
                         • <strong>HITL Security Gates:</strong> {hitls} stories require human sign-off<br>
-                        • <strong>Ambiguities Surfaced:</strong> {len(res_obj.summary.open_questions)} open questions • {len(res_obj.summary.key_constraints)} constraints<br>
+                        • <strong>Ambiguities Surfaced:</strong> {len(res_obj.summary.open_questions)} open questions • {len(res_obj.summary.risks_and_dependencies)} risks/dependencies<br>
                         • <strong>FinOps Cost &amp; Tokens:</strong> ${res_obj.metadata.estimated_cost_usd:.5f} ({res_obj.metadata.estimated_tokens} tokens)
                     </div>
                 </div>
@@ -1331,8 +1331,8 @@ def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
                 for q in res_obj.summary.open_questions:
                     st.markdown(f"- ❓ {q}")
             with c_col:
-                st.markdown("**🔒 Extracted Architectural & Compliance Constraints:**")
-                for c_item in res_obj.summary.key_constraints:
+                st.markdown("**🔒 Extracted Risks, Dependencies & Compliance Constraints:**")
+                for c_item in res_obj.summary.risks_and_dependencies:
                     st.markdown(f"- 🔒 {c_item}")
 
 
@@ -1356,8 +1356,10 @@ def build_unified_events(
         ("03_pci_compliance_spec.pdf", eval_engine.analyze(samples_dir / "03_pci_compliance_spec.pdf")),
     ]
     seen_keys: set[str] = set()
+    default_ts = datetime.now(timezone.utc).isoformat()
     for _, res_obj in all_results:
         src_file = Path(res_obj.metadata.source_file).name
+        ts_val = getattr(res_obj.metadata, "processed_at_utc", default_ts)
         for s in res_obj.stories:
             dedup_key = f"{src_file}:{s.id}:{s.backlog_alignment.value}"
             if dedup_key in seen_keys:
@@ -1369,7 +1371,7 @@ def build_unified_events(
                     "severity": "CRITICAL_CONFLICT",
                     "badge": "🚨 CRITICAL CONFLICT",
                     "color": "#e11d48",
-                    "timestamp": res_obj.metadata.processed_at_utc,
+                    "timestamp": ts_val,
                     "source_file": src_file,
                     "story_id": s.id,
                     "title": f"Architectural Conflict: {s.id} ({s.title}) contradicts {', '.join(s.related_backlog_ids)}",
@@ -1388,7 +1390,7 @@ def build_unified_events(
                     "severity": "DUPLICATE_BLOCKED",
                     "badge": "🛑 DUPLICATE BLOCKED",
                     "color": "#8b5cf6",
-                    "timestamp": res_obj.metadata.processed_at_utc,
+                    "timestamp": ts_val,
                     "source_file": src_file,
                     "story_id": s.id,
                     "title": f"Duplicate Ticket Prevented: {s.id} ({s.title}) duplicates {', '.join(s.related_backlog_ids)}",
@@ -1406,7 +1408,7 @@ def build_unified_events(
                     "severity": "HITL_REVIEW_GATE",
                     "badge": "⚠️ HITL REVIEW GATE",
                     "color": "#d97706",
-                    "timestamp": res_obj.metadata.processed_at_utc,
+                    "timestamp": ts_val,
                     "source_file": src_file,
                     "story_id": s.id,
                     "title": f"P0-Critical Human Sign-Off Required: {s.id} ({s.title})",
