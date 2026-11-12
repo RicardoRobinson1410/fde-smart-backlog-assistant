@@ -35,11 +35,12 @@ for _m in (_cfg_mod, _mod_mod, _par_mod, _prm_mod, _eng_mod):
 
 from backlog_assistant.config import ScenarioConfig, load_scenario_config
 from backlog_assistant.engine import BacklogEngine
-from backlog_assistant.models import BacklogAlignment, BacklogAnalysisResult
+from backlog_assistant.models import BacklogAlignment, BacklogAnalysisResult, ExistingBacklogItem
 from backlog_assistant.parser import (
     extract_document_text,
     load_existing_backlog,
     redact_pii_and_secrets,
+    save_existing_backlog,
 )
 
 
@@ -260,6 +261,183 @@ def _markdown_to_clean_html(md_text: str) -> str:
     return "\n".join(out)
 
 
+def _append_task_audit_event(cfg: ScenarioConfig, event: dict[str, Any]) -> None:
+    """Append a structured FDE task-mutation / HITL governance event to outputs/audit_trail.jsonl."""
+    try:
+        log_path = Path(cfg.paths.audit_log_path)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "scenario_id": cfg.scenario_id,
+            **event,
+        }
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
+def _classify_task_action_risk(action: dict[str, Any], backlog: list[dict[str, Any]]) -> tuple[bool, str]:
+    """FDE Risk-Tiered HITL Policy: critical actions ALWAYS require explicit human approval."""
+    op = str(action.get("op", "")).lower()
+    target_id = str(action.get("id", "")).upper()
+    new_priority = str(action.get("priority", ""))
+    new_status = str(action.get("status", ""))
+    existing = next((b for b in backlog if str(b.get("id", "")).upper() == target_id), None)
+
+    if op == "delete":
+        return True, f"Destructive Action: Permanent deletion of ticket {target_id or 'task'} requires explicit Human-in-the-Loop (HITL) approval."
+    if "P0" in new_priority or (existing and "P0" in str(existing.get("priority", ""))):
+        return True, f"Critical P0 Blast Radius: Modifying or creating a P0 - Critical ticket ({target_id or 'NEW'}) requires HITL sign-off."
+    if new_status.lower() in {"done", "in review / hitl", "closed"}:
+        return True, f"Governance Gate: Transitioning {target_id} to '{new_status}' requires Human-in-the-Loop verification."
+    if target_id in {"FIN-104", "FIN-106"}:
+        return True, f"Security/Compliance Anchor: {target_id} is a PCI/security-sensitive ticket requiring HITL approval."
+    return False, "Standard P1/P2 backlog operation (auto-approved under FDE policy & logged to audit_trail.jsonl)."
+
+
+def _execute_task_action(action: dict[str, Any], cfg: ScenarioConfig, approved_by_human: bool = False) -> dict[str, Any]:
+    """Execute create/update/move/delete on the local JSON backlog store and emit an audit trail record."""
+    items = load_existing_backlog(cfg.paths.baseline_backlog)
+    op = str(action.get("op", "")).lower()
+    target_id = str(action.get("id", "")).upper().strip()
+
+    if op == "create":
+        if not target_id:
+            nums = [int(m.group(1)) for b in items if (m := re.search(r"(\d+)$", b.id))]
+            next_num = max(nums, default=106) + 1
+            target_id = f"FIN-{next_num}"
+        new_item = ExistingBacklogItem(
+            id=target_id,
+            title=str(action.get("title") or "New Engineering Task").strip(),
+            status=str(action.get("status") or "To Do").strip(),
+            priority=str(action.get("priority") or "P1 - High").strip(),
+            category=str(action.get("category") or "Feature").strip(),
+            summary=str(action.get("summary") or action.get("title") or "Created via FDE Conversational Agent.").strip(),
+        )
+        items.append(new_item)
+        save_existing_backlog(items, cfg.paths.baseline_backlog)
+        _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
+        _append_task_audit_event(cfg, {"event_type": "task_create", "ticket_id": target_id, "approved_by_human": approved_by_human, "item": new_item.model_dump()})
+        return {"ok": True, "op": "create", "ticket": new_item.model_dump(), "message": f"Created task {target_id}: {new_item.title}"}
+
+    idx = next((i for i, b in enumerate(items) if b.id.upper() == target_id), None)
+    if idx is None:
+        return {"ok": False, "error": f"Ticket '{target_id}' was not found in {cfg.paths.baseline_backlog}."}
+
+    if op == "delete":
+        removed = items.pop(idx)
+        save_existing_backlog(items, cfg.paths.baseline_backlog)
+        _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
+        _append_task_audit_event(cfg, {"event_type": "task_delete", "ticket_id": target_id, "approved_by_human": approved_by_human, "removed": removed.model_dump()})
+        return {"ok": True, "op": "delete", "ticket": removed.model_dump(), "message": f"Deleted task {target_id}: {removed.title}"}
+
+    cur = items[idx]
+    updated = ExistingBacklogItem(
+        id=cur.id,
+        title=str(action.get("title") or cur.title).strip(),
+        status=str(action.get("status") or cur.status).strip(),
+        priority=str(action.get("priority") or cur.priority).strip(),
+        category=str(action.get("category") or cur.category).strip(),
+        summary=str(action.get("summary") or cur.summary).strip(),
+    )
+    items[idx] = updated
+    save_existing_backlog(items, cfg.paths.baseline_backlog)
+    _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
+    _append_task_audit_event(cfg, {"event_type": f"task_{op}", "ticket_id": target_id, "approved_by_human": approved_by_human, "before": cur.model_dump(), "after": updated.model_dump()})
+    return {"ok": True, "op": op, "ticket": updated.model_dump(), "message": f"Updated {target_id} ({updated.status} • {updated.priority})"}
+
+
+def _detect_task_action_intent(
+    message: str,
+    backlog: list[dict[str, Any]],
+    api_key: str,
+) -> dict[str, Any] | None:
+    """Detect if the user is asking to create, modify, move, or delete a backlog task."""
+    q = message.strip()
+    q_low = q.lower()
+    action_verbs = [
+        "create", "add task", "new task", "add ticket", "new ticket",
+        "move", "change status", "set status",
+        "update", "modify", "edit", "rename", "change priority", "set priority",
+        "delete", "remove", "drop",
+    ]
+    if not any(v in q_low for v in action_verbs):
+        return None
+
+    # Try Live OpenAI structured intent parser first if key is available
+    if api_key:
+        try:
+            sys_p = (
+                "You are an FDE Task Intent Extractor. Determine if the user's message is a command to "
+                "CREATE, UPDATE/MODIFY, MOVE (status change), or DELETE a task in the backlog.\n"
+                "Return ONLY valid JSON with keys:\n"
+                '{"is_task_command": true/false, "op": "create"|"update"|"move"|"delete", '
+                '"id": "FIN-101 or empty string for create", "title": "...", '
+                '"status": "To Do"|"In Progress"|"In Review / HITL"|"Done" or empty string, '
+                '"priority": "P0 - Critical"|"P1 - High"|"P2 - Medium" or empty string, '
+                '"category": "Feature"|"Security"|"Infrastructure" or empty string, '
+                '"summary": "..."}\n'
+                f"Existing backlog IDs: {[b.get('id') for b in backlog]}"
+            )
+            req_body = json.dumps({
+                "model": "gpt-4o-mini",
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": sys_p},
+                    {"role": "user", "content": q},
+                ],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=req_body,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                parsed = json.loads(json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"])
+            if parsed.get("is_task_command") and parsed.get("op") in {"create", "update", "move", "delete"}:
+                return parsed
+            return None
+        except Exception:
+            pass
+
+    # Deterministic fallback intent parser
+    id_match = re.search(r"\b(FIN-\d+|STORY-\d+)\b", q, re.IGNORECASE)
+    target_id = id_match.group(1).upper() if id_match else ""
+    pri = "P0 - Critical" if "p0" in q_low or "critical" in q_low else ("P1 - High" if "p1" in q_low or "high" in q_low else ("P2 - Medium" if "p2" in q_low or "medium" in q_low else ""))
+    status = ""
+    if "done" in q_low:
+        status = "Done"
+    elif "review" in q_low or "hitl" in q_low:
+        status = "In Review / HITL"
+    elif "progress" in q_low:
+        status = "In Progress"
+    elif "to do" in q_low or "todo" in q_low:
+        status = "To Do"
+
+    if any(w in q_low for w in ["delete", "remove", "drop"]) and target_id:
+        return {"is_task_command": True, "op": "delete", "id": target_id}
+    if any(w in q_low for w in ["move", "change status", "set status"]) and target_id and status:
+        return {"is_task_command": True, "op": "move", "id": target_id, "status": status}
+    if any(w in q_low for w in ["update", "modify", "edit", "rename", "change priority", "set priority"]) and target_id:
+        return {"is_task_command": True, "op": "update", "id": target_id, "priority": pri, "status": status}
+    if any(w in q_low for w in ["create", "add task", "new task", "add ticket", "new ticket"]):
+        clean_title = re.sub(r"^(create|add)\s+(a\s+)?(new\s+)?(p[0-2]\s+)?(critical\s+)?(task|ticket|story)\s*(to|for|:)?\s*", "", q, flags=re.IGNORECASE).strip()
+        return {
+            "is_task_command": True,
+            "op": "create",
+            "id": target_id,
+            "title": clean_title[:90] or "New Engineering Task",
+            "status": status or "To Do",
+            "priority": pri or "P1 - High",
+            "category": "Security" if ("pci" in q_low or "security" in q_low) else "Feature",
+            "summary": q,
+        }
+    return None
+
+
 def _answer_with_live_openai_or_analytical_engine(
     message: str,
     history: list[dict[str, str]],
@@ -328,8 +506,49 @@ def _answer_with_live_openai_or_analytical_engine(
         },
     ]
 
-    # Try Live OpenAI API first if OPENAI_API_KEY is configured (using stdlib urllib to avoid numpy/C-extension thread import collisions)
+    # Check if user is issuing a Task CRUD / Workflow command (create, update, move, delete)
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    task_action = _detect_task_action_intent(q, backlog, api_key)
+    if task_action:
+        requires_hitl, risk_reason = _classify_task_action_risk(task_action, backlog)
+        op_upper = str(task_action.get("op", "")).upper()
+        t_id = str(task_action.get("id") or "NEW-TASK")
+        steps.append(
+            {
+                "title": f"🛡️ Executed Subagent: security-reviewer ({cfg.subagent_models.security_reviewer}) — HITL Risk Check",
+                "detail": f"Operation: {op_upper} ({t_id})\nHITL Required: {requires_hitl}\nPolicy Assessment: {risk_reason}",
+            }
+        )
+        if requires_hitl:
+            return {
+                "type": "hitl_action",
+                "steps": steps,
+                "action": task_action,
+                "risk_reason": risk_reason,
+                "replyHtml": "",
+            }
+        exec_res = _execute_task_action(task_action, cfg, approved_by_human=False)
+        if exec_res.get("ok"):
+            tk = exec_res["ticket"]
+            return {
+                "type": "conversation",
+                "steps": steps,
+                "replyHtml": (
+                    f"<div class='story-card' style='border-color:#10a37f;'>"
+                    f"<strong style='color:#6ee7b7;'>✅ Task {op_upper} Executed (Auto-Approved &amp; Persisted)</strong>"
+                    f"<div style='color:#fff; font-weight:700; margin-top:6px;'>{html.escape(tk['id'])}: {html.escape(tk['title'])}</div>"
+                    f"<div style='font-size:12.5px; color:#b4b4b4; margin-top:4px;'>Status: <code>{html.escape(tk['status'])}</code> • Priority: <code>{html.escape(tk['priority'])}</code></div>"
+                    f"<div style='font-size:11.5px; color:#8e8e8e; margin-top:6px;'>Persisted to <code>{html.escape(cfg.paths.baseline_backlog)}</code> and logged to <code>{html.escape(cfg.paths.audit_log_path)}</code>.</div>"
+                    f"</div>"
+                ),
+            }
+        return {
+            "type": "conversation",
+            "steps": steps,
+            "replyHtml": f"<div class='story-card' style='border-color:#e11d48; color:#fda4af;'>⚠️ {html.escape(str(exec_res.get('error', 'Operation failed')))}</div>",
+        }
+
+    # Try Live OpenAI API first if OPENAI_API_KEY is configured (using stdlib urllib to avoid numpy/C-extension thread import collisions)
     if api_key:
         try:
             context_payload = {
@@ -606,6 +825,20 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                     cfg=cur_cfg,
                 )
                 self._send_json(200, result)
+                return
+
+            if self.path == "/api/tasks/execute":
+                action = data.get("action") or {}
+                approved = bool(data.get("approved", False))
+                if not approved:
+                    _append_task_audit_event(
+                        cur_cfg,
+                        {"event_type": "task_action_rejected", "action": action, "approved_by_human": False},
+                    )
+                    self._send_json(200, {"ok": True, "rejected": True, "message": "Action rejected by human reviewer and logged to audit_trail.jsonl."})
+                    return
+                res = _execute_task_action(action, cur_cfg, approved_by_human=True)
+                self._send_json(200 if res.get("ok") else 400, res)
                 return
 
             self._send_json(404, {"error": "Not found"})
@@ -1279,6 +1512,40 @@ def render_chatgpt_conversational_first_tab(
           }};
         }}
 
+        const pendingHitlActions = {{}};
+
+        async function resolveHitlAction(hitlId, approved) {{
+          const act = pendingHitlActions[hitlId];
+          const card = document.getElementById(hitlId);
+          if (!act || !card) return;
+          try {{
+            const resp = await fetch(API_BASE + '/api/tasks/execute', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ action: act, approved: approved }})
+            }});
+            const res = await resp.json();
+            if (approved && res.ok) {{
+              card.style.borderColor = '#10a37f';
+              card.innerHTML = `
+                <div style="color:#6ee7b7; font-weight:700; font-size:14px;">✅ Human-Approved &amp; Executed</div>
+                <div style="color:#e5e5e5; margin-top:6px;">${{res.message}}</div>
+                <div style="color:#9ca3af; font-size:11.5px; margin-top:6px;">Persisted to <code>data/existing_backlog.json</code> and logged to <code>outputs/audit_trail.jsonl</code>. Switch to the Jira Kanban tab to see the updated board!</div>
+              `;
+            }} else if (!approved) {{
+              card.style.borderColor = '#6b7280';
+              card.innerHTML = `
+                <div style="color:#d1d5db; font-weight:700; font-size:14px;">❌ Action Rejected by Human Reviewer</div>
+                <div style="color:#9ca3af; font-size:12px; margin-top:4px;">No changes were made to the backlog. Rejection logged to <code>outputs/audit_trail.jsonl</code>.</div>
+              `;
+            }} else {{
+              card.innerHTML = `<div style="color:#fda4af;">⚠️ Error: ${{res.error || 'Failed to execute action'}}</div>`;
+            }}
+          }} catch (err) {{
+            card.innerHTML = `<div style="color:#fda4af;">⚠️ Network error executing HITL decision.</div>`;
+          }}
+        }}
+
         function streamAntigravityExecution(tId, plan, onScroll) {{
           const flowBox = document.getElementById(tId + '-flow');
           const replyBox = document.getElementById(tId + '-reply');
@@ -1288,6 +1555,30 @@ def render_chatgpt_conversational_first_tab(
             if (stepIdx >= plan.steps.length) {{
               if (plan.type === 'document') {{
                 renderDocumentReplyStreaming(plan.doc, replyBox, onScroll);
+              }} else if (plan.type === 'hitl_action') {{
+                const hId = `${{tId}}-hitl`;
+                pendingHitlActions[hId] = plan.action;
+                const a = plan.action || {{}};
+                replyBox.innerHTML = `
+                  <div class="story-card" id="${{hId}}" style="border:1.5px solid #e11d48; background:#190f14;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                      <strong style="color:#fda4af; font-size:14.5px;">🚨 Human-in-the-Loop (HITL) Approval Required</strong>
+                      <span class="tag t-con">${{(a.op || '').toUpperCase()}} • CRITICAL GATE</span>
+                    </div>
+                    <div style="font-size:12.5px; color:#e5e5e5; margin-bottom:8px;"><strong>Risk Reason:</strong> ${{plan.risk_reason}}</div>
+                    <div style="background:#0d0d0d; border:1px solid #2b2b2b; border-radius:8px; padding:9px 11px; font-family:'JetBrains Mono', monospace; font-size:11.5px; color:#93c5fd; margin-bottom:10px;">
+                      Target Ticket: ${{a.id || 'NEW'}}<br/>
+                      ${{a.title ? 'Title: ' + a.title + '<br/>' : ''}}
+                      ${{a.status ? 'Target Status: ' + a.status + '<br/>' : ''}}
+                      ${{a.priority ? 'Priority: ' + a.priority : ''}}
+                    </div>
+                    <div style="display:flex; gap:10px;">
+                      <button onclick="resolveHitlAction('${{hId}}', true)" style="background:#10a37f; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer;">✅ Approve &amp; Execute</button>
+                      <button onclick="resolveHitlAction('${{hId}}', false)" style="background:#374151; color:#e5e5e5; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer;">❌ Reject</button>
+                    </div>
+                  </div>
+                `;
+                onScroll();
               }} else {{
                 replyBox.innerHTML = plan.replyHtml;
                 onScroll();

@@ -57,3 +57,11 @@ def load_existing_backlog(backlog_path: str | Path | None = None) -> list[Existi
         raw_list = json.loads(path.read_text(encoding="utf-8"))
         items.extend(ExistingBacklogItem.model_validate(entry) for entry in raw_list)
     return items
+
+
+def save_existing_backlog(items: list[ExistingBacklogItem], backlog_path: str | Path) -> None:
+    """Persist backlog items atomically to local JSON."""
+    path = Path(backlog_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = [item.model_dump() for item in items]
+    path.write_text(json.dumps(serialized, indent=2) + "\n", encoding="utf-8")

@@ -219,6 +219,49 @@ def test_fde_guardrails_pii_redaction_finops_hitl_and_audit_log(tmp_path: Path) 
     assert portal_records[0]["document_sha256"] == res_pci.metadata.document_sha256
 
 
+def test_task_crud_and_hitl_risk_policy(tmp_path: Path) -> None:
+    """Verify agent Task CRUD (create/update/move/delete) and HITL gating for critical operations."""
+    from backlog_assistant.app import _classify_task_action_risk, _execute_task_action
+    from backlog_assistant.models import ExistingBacklogItem
+    from backlog_assistant.parser import save_existing_backlog
+
+    backlog_file = tmp_path / "existing_backlog.json"
+    audit_file = tmp_path / "audit_trail.jsonl"
+    save_existing_backlog(
+        [
+            ExistingBacklogItem(id="FIN-101", title="OAuth2 Login", status="Open", priority="P1 - High", category="Auth", summary="Base"),
+            ExistingBacklogItem(id="FIN-104", title="Legacy 3DES", status="In Progress", priority="P2 - Medium", category="Security", summary="Legacy"),
+        ],
+        backlog_file,
+    )
+    cfg = load_scenario_config().with_overrides({
+        "paths.baseline_backlog": str(backlog_file),
+        "paths.audit_log_path": str(audit_file),
+    })
+
+    # 1. Critical operations must require HITL approval
+    hitl_del, _ = _classify_task_action_risk({"op": "delete", "id": "FIN-101"}, [])
+    hitl_p0, _ = _classify_task_action_risk({"op": "create", "title": "Emergency Fix", "priority": "P0 - Critical"}, [])
+    hitl_done, _ = _classify_task_action_risk({"op": "move", "id": "FIN-101", "status": "Done"}, [])
+    hitl_sec, _ = _classify_task_action_risk({"op": "move", "id": "FIN-104", "status": "In Progress"}, [])
+    assert hitl_del and hitl_p0 and hitl_done and hitl_sec
+
+    # 2. Non-critical P1/P2 create does not block on HITL and persists cleanly
+    hitl_low, _ = _classify_task_action_risk({"op": "create", "title": "Update Docs", "priority": "P2 - Medium"}, [])
+    assert hitl_low is False
+    res_create = _execute_task_action({"op": "create", "title": "Update Docs", "priority": "P2 - Medium"}, cfg)
+    assert res_create["ok"] is True
+    assert res_create["ticket"]["id"] == "FIN-105"
+
+    # 3. Move & Delete execute after human approval and emit audit trail
+    res_move = _execute_task_action({"op": "move", "id": "FIN-105", "status": "In Progress"}, cfg, approved_by_human=True)
+    assert res_move["ok"] and res_move["ticket"]["status"] == "In Progress"
+    res_del = _execute_task_action({"op": "delete", "id": "FIN-105"}, cfg, approved_by_human=True)
+    assert res_del["ok"]
+    assert len(load_existing_backlog(backlog_file)) == 2
+    assert len(audit_file.read_text(encoding="utf-8").splitlines()) == 3
+
+
 
 
 
