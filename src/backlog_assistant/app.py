@@ -888,18 +888,26 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                     raw_text = extract_document_text(tmp_path)
                     scrubbed_text, pii_count = redact_pii_and_secrets(raw_text)
                     doc_sha = compute_sha256(raw_text)
-                    engine = BacklogEngine(config=cur_cfg, use_mock=True)
-                    res = engine.analyze_document(tmp_path)
+                    use_mock_upload = not bool(os.getenv("OPENAI_API_KEY", "").strip())
+                    try:
+                        engine = BacklogEngine(config=cur_cfg, use_mock=use_mock_upload)
+                        res = engine.analyze_document(tmp_path)
+                    except Exception:
+                        engine = BacklogEngine(config=cur_cfg, use_mock=True)
+                        res = engine.analyze_document(tmp_path)
                     stories_list = []
+                    proposed_actions = []
                     for s in res.stories:
+                        align_val = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
+                        cat_val = getattr(s.category, "value", str(s.category))
                         stories_list.append({
                             "id": s.id,
                             "title": s.title,
                             "user_story": s.user_story,
                             "priority": s.priority,
                             "points": s.story_points_fibonacci or 3,
-                            "category": getattr(s.category, "value", str(s.category)),
-                            "alignment": getattr(s.backlog_alignment, "value", str(s.backlog_alignment)),
+                            "category": cat_val,
+                            "alignment": align_val,
                             "related": s.related_existing_ids,
                             "notes": s.deduplication_notes,
                             "rationale": s.rationale,
@@ -907,6 +915,19 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                             "hitl": s.requires_human_approval,
                             "confidence": f"{int(s.confidence_score * 100)}%",
                         })
+                        if align_val != "DUPLICATE":
+                            is_upd = align_val == "UPDATES_EXISTING" and bool(s.related_existing_ids)
+                            proposed_actions.append({
+                                "op": "update" if is_upd else "create",
+                                "id": s.related_existing_ids[0] if is_upd else "",
+                                "title": s.title,
+                                "priority": s.priority,
+                                "category": cat_val,
+                                "status": "In Review / HITL" if s.requires_human_approval else "To Do",
+                                "alignment": align_val,
+                                "points": s.story_points_fibonacci or 3,
+                                "summary": f"{s.user_story} | {s.deduplication_notes} | AC-1: {s.acceptance_criteria[0] if s.acceptance_criteria else ''}".strip(),
+                            })
                     doc_obj = {
                         "filename": filename,
                         "ext": suffix.upper().lstrip("."),
@@ -921,6 +942,7 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                         "open_questions": res.summary.open_questions,
                         "risks": res.summary.risks_and_dependencies,
                         "stories": stories_list,
+                        "proposed_actions": proposed_actions,
                         "total_tokens": res.metadata.estimated_tokens,
                         "total_cost": f"${res.metadata.estimated_cost_usd:.5f}",
                     }
@@ -957,6 +979,33 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                     return
                 res = _execute_task_action(action, cur_cfg, approved_by_human=True)
                 self._send_json(200 if res.get("ok") else 400, res)
+                return
+
+            if self.path == "/api/tasks/execute_batch":
+                actions = data.get("actions") or []
+                approved = bool(data.get("approved", False))
+                if not approved:
+                    _append_task_audit_event(
+                        cur_cfg,
+                        {"event_type": "task_batch_rejected", "count": len(actions), "approved_by_human": False},
+                    )
+                    self._send_json(200, {"ok": True, "rejected": True, "message": "Batch task creation rejected by human reviewer and logged to audit_trail.jsonl."})
+                    return
+                executed_tickets = []
+                errors = []
+                for act in actions:
+                    res = _execute_task_action(act, cur_cfg, approved_by_human=True)
+                    if res.get("ok") and res.get("ticket"):
+                        executed_tickets.append(res["ticket"])
+                    else:
+                        errors.append(res.get("error", "Unknown error"))
+                self._send_json(200, {
+                    "ok": len(executed_tickets) > 0,
+                    "count": len(executed_tickets),
+                    "tickets": executed_tickets,
+                    "errors": errors,
+                    "message": f"Approved and synced {len(executed_tickets)} task(s) to data/existing_backlog.json & Jira Kanban.",
+                })
                 return
 
             self._send_json(404, {"error": "Not found"})
@@ -1808,6 +1857,81 @@ def render_chatgpt_conversational_first_tab(
               onScroll();
             }}, i * 240);
           }});
+
+          const batchActions = d.proposed_actions || [];
+          if (batchActions.length > 0) {{
+            setTimeout(() => {{
+              const bId = 'batch-hitl-' + Date.now();
+              window._pendingBatchActions = window._pendingBatchActions || {{}};
+              window._pendingBatchActions[bId] = batchActions;
+              const rowsHtml = batchActions.map((a, idx) => `
+                <label style="display:flex; align-items:flex-start; gap:8px; padding:7px 9px; background:#0d0d0d; border:1px solid #2b2b2b; border-radius:7px; margin-bottom:6px; cursor:pointer;">
+                  <input type="checkbox" class="batch-chk-${{bId}}" data-idx="${{idx}}" checked style="margin-top:3px; accent-color:#10a37f;" />
+                  <div style="font-size:12px; color:#e5e5e5; line-height:1.4;">
+                    <strong>[${{(a.op || 'create').toUpperCase()}}${{a.id ? ' ' + a.id : ''}}] ${{a.title}}</strong>
+                    <span class="tag t-pri" style="margin-left:6px;">${{a.priority}} • ${{a.status}} • ${{a.alignment}}</span>
+                    <div style="color:#9ca3af; font-size:11.5px; margin-top:2px;">${{a.summary}}</div>
+                  </div>
+                </label>
+              `).join('');
+              replyBox.innerHTML += `
+                <div class="story-card" id="${{bId}}" style="border:1.5px solid #e11d48; background:#190f14; margin-top:12px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <strong style="color:#fda4af; font-size:14.5px;">🚨 Human-in-the-Loop (HITL) Batch Task Creation Gate</strong>
+                    <span class="tag t-con">${{batchActions.length}} PROPOSED TASK(S)</span>
+                  </div>
+                  <div style="font-size:12px; color:#d4d4d4; margin-bottom:8px;">Select the extracted tasks to persist to <code>data/existing_backlog.json</code> and sync to the Jira Kanban board (duplicates were automatically excluded):</div>
+                  ${{rowsHtml}}
+                  <div style="display:flex; gap:10px; margin-top:8px;">
+                    <button onclick="resolveBatchHitl('${{bId}}', true)" style="background:#10a37f; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer;">✅ Approve Selected &amp; Create Tasks</button>
+                    <button onclick="resolveBatchHitl('${{bId}}', false)" style="background:#374151; color:#e5e5e5; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer;">❌ Reject</button>
+                  </div>
+                </div>
+              `;
+              onScroll();
+            }}, d.stories.length * 240 + 120);
+          }}
+        }}
+
+        async function resolveBatchHitl(bId, approved) {{
+          const allActs = (window._pendingBatchActions && window._pendingBatchActions[bId]) || [];
+          const card = document.getElementById(bId);
+          if (!card) return;
+          const selectedActs = approved
+            ? Array.from(document.querySelectorAll('.batch-chk-' + bId))
+                .filter(ch => ch.checked)
+                .map(ch => allActs[parseInt(ch.getAttribute('data-idx'), 10)])
+                .filter(Boolean)
+            : allActs;
+          if (approved && selectedActs.length === 0) {{
+            alert('Please select at least one task to create.');
+            return;
+          }}
+          try {{
+            const resp = await fetch(API_BASE + '/api/tasks/execute_batch', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ actions: selectedActs, approved: approved }})
+            }});
+            const res = await resp.json();
+            if (approved && res.ok) {{
+              try {{ new BroadcastChannel('fde_backlog_sync').postMessage({{ type: 'tasks_updated' }}); }} catch (e) {{}}
+              const createdList = (res.tickets || []).map(t => `<li><code>${{t.id}}</code>: ${{t.title}} (${{t.status}} • ${{t.priority}})</li>`).join('');
+              card.style.borderColor = '#10a37f';
+              card.innerHTML = `
+                <div style="color:#6ee7b7; font-weight:700; font-size:14px;">✅ Human-Approved &amp; Synced ${{res.count}} Task(s)</div>
+                <ul style="color:#e5e5e5; font-size:12.5px; margin:8px 0 6px 18px;">${{createdList}}</ul>
+                <div style="color:#9ca3af; font-size:11.5px;">Persisted to <code>data/existing_backlog.json</code>, logged to <code>outputs/audit_trail.jsonl</code>, and synced to the Jira Kanban board.</div>
+              `;
+            }} else if (!approved) {{
+              card.style.borderColor = '#6b7280';
+              card.innerHTML = `<div style="color:#d1d5db; font-weight:700; font-size:14px;">❌ Batch Task Creation Rejected by Human Reviewer</div>`;
+            }} else {{
+              card.innerHTML = `<div style="color:#fda4af;">⚠️ Error: ${{(res.errors || []).join(', ') || 'Batch execution failed'}}</div>`;
+            }}
+          }} catch (err) {{
+            card.innerHTML = `<div style="color:#fda4af;">⚠️ Network error executing batch HITL decision.</div>`;
+          }}
         }}
       </script>
     </body>
