@@ -889,6 +889,33 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                 _CHAT_SERVER_STATE["backlog"] = [b.model_dump() for b in items]
                 self._send_json(200, {"tasks": _CHAT_SERVER_STATE["backlog"]})
                 return
+            if self.path == "/api/finops":
+                cur_cfg = _CHAT_SERVER_STATE["cfg"]
+                audit_rows = load_audit_history(cur_cfg.paths.audit_log_path)
+                total_tokens = sum(int(r.get("estimated_tokens", 0) or 0) for r in audit_rows)
+                total_cost = sum(float(r.get("estimated_cost_usd", 0.0) or 0.0) for r in audit_rows)
+                doc_runs = sum(1 for r in audit_rows if r.get("estimated_tokens"))
+                naive_cost = max(doc_runs * 0.00620, (total_tokens / 1650.0) * 0.00620)
+                saved_usd = max(0.0, naive_cost - total_cost)
+                recent = []
+                for r in reversed(audit_rows[-8:]):
+                    recent.append({
+                        "timestamp": str(r.get("timestamp", ""))[:19].replace("T", " "),
+                        "label": str(r.get("document_name") or r.get("event_type") or "pipeline_event"),
+                        "ticket": str(r.get("ticket_id") or f"{r.get('story_count', 0)} stories"),
+                        "tokens": int(r.get("estimated_tokens", 0) or 0),
+                        "cost": float(r.get("estimated_cost_usd", 0.0) or 0.0),
+                    })
+                self._send_json(200, {
+                    "total_events": len(audit_rows),
+                    "doc_runs": doc_runs,
+                    "total_tokens": total_tokens,
+                    "total_cost_usd": round(total_cost, 6),
+                    "naive_cost_usd": round(naive_cost, 6),
+                    "saved_usd": round(saved_usd, 6),
+                    "recent": recent,
+                })
+                return
             self._send_json(404, {"error": "Not found"})
 
         def do_POST(self) -> None:
@@ -3274,59 +3301,113 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         naive_yr = naive_monthly * 12
         tiered_yr = tiered_monthly * 12
 
-        st.markdown(
-            f"""
-            <div style="background:#141414; border-radius:14px; padding:18px; border:1px solid #2a2a2a; height:100%;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-                    <div style="font-weight:700; font-size:0.94rem; color:#ffffff;">📊 Cost Comparison: Naive All-gpt-4o vs. Tiered Router</div>
-                    <div style="font-size:0.78rem; color:#cbd5e1;">
-                        <span style="color:#f43f5e; font-weight:700;">■ Naive All-gpt-4o</span> &nbsp;&nbsp;
-                        <span style="color:#10a37f; font-weight:700;">■ Our Tiered Router (94.2% Saved)</span>
-                    </div>
-                </div>
-
-                <div style="margin-bottom:14px;">
-                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
-                        <span><strong>Per 1,000 Documents</strong></span>
-                        <span><strong style="color:#f43f5e;">${naive_1k:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_1k:,.2f}</strong></span>
-                    </div>
-                    <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;">
-                        <div style="background:#f43f5e; width:100%; height:100%;"></div>
-                    </div>
-                    <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;">
-                        <div style="background:#10a37f; width:6%; height:100%;"></div>
-                    </div>
-                </div>
-
-                <div style="margin-bottom:14px;">
-                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
-                        <span><strong>Monthly ({vol:,} Docs)</strong></span>
-                        <span><strong style="color:#f43f5e;">${naive_monthly:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_monthly:,.2f}</strong></span>
-                    </div>
-                    <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;">
-                        <div style="background:#f43f5e; width:100%; height:100%;"></div>
-                    </div>
-                    <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;">
-                        <div style="background:#10a37f; width:6%; height:100%;"></div>
-                    </div>
-                </div>
-
-                <div>
-                    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
-                        <span><strong>Annual ({vol*12:,} Docs)</strong></span>
-                        <span><strong style="color:#f43f5e;">${naive_yr:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_yr:,.2f}</strong></span>
-                    </div>
-                    <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;">
-                        <div style="background:#f43f5e; width:100%; height:100%;"></div>
-                    </div>
-                    <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;">
-                        <div style="background:#10a37f; width:6%; height:100%;"></div>
-                    </div>
+        chart_html = "\n".join(line.strip() for line in f"""
+        <div style="background:#141414; border-radius:14px; padding:18px; border:1px solid #2a2a2a; height:100%;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+                <div style="font-weight:700; font-size:0.94rem; color:#ffffff;">📊 Cost Comparison: Naive All-gpt-4o vs. Tiered Router</div>
+                <div style="font-size:0.78rem; color:#cbd5e1;">
+                    <span style="color:#f43f5e; font-weight:700;">■ Naive All-gpt-4o</span> &nbsp;&nbsp;
+                    <span style="color:#10a37f; font-weight:700;">■ Our Tiered Router (94.2% Saved)</span>
                 </div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            <div style="margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
+                    <span><strong>Per 1,000 Documents</strong></span>
+                    <span><strong style="color:#f43f5e;">${naive_1k:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_1k:,.2f}</strong></span>
+                </div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:6%; height:100%;"></div></div>
+            </div>
+            <div style="margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
+                    <span><strong>Monthly ({vol:,} Docs)</strong></span>
+                    <span><strong style="color:#f43f5e;">${naive_monthly:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_monthly:,.2f}</strong></span>
+                </div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:6%; height:100%;"></div></div>
+            </div>
+            <div>
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#cbd5e1; margin-bottom:4px;">
+                    <span><strong>Annual ({vol*12:,} Docs)</strong></span>
+                    <span><strong style="color:#f43f5e;">${naive_yr:,.2f}</strong> vs. <strong style="color:#10a37f;">${tiered_yr:,.2f}</strong></span>
+                </div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; margin-bottom:4px; overflow:hidden;"><div style="background:#f43f5e; width:100%; height:100%;"></div></div>
+                <div style="background:#222; border-radius:6px; height:12px; width:100%; overflow:hidden;"><div style="background:#10a37f; width:6%; height:100%;"></div></div>
+            </div>
+        </div>
+        """.splitlines())
+        st.markdown(chart_html, unsafe_allow_html=True)
+
+    st.markdown("#### 📡 Real-Time Cost & Token Monitor (Live Telemetry)")
+    finops_port = int(_CHAT_SERVER_STATE.get("port") or 8765)
+    live_monitor_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body {{ margin:0; font-family:'Inter', -apple-system, sans-serif; background:transparent; color:#e5e5e5; }}
+        .grid {{ display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-bottom:12px; }}
+        .kpi {{ background:#141414; border:1px solid #2a2a2a; border-radius:12px; padding:12px 14px; }}
+        .lbl {{ font-size:11px; color:#9ca3af; text-transform:uppercase; font-weight:700; letter-spacing:.03em; }}
+        .val {{ font-size:20px; font-weight:800; color:#fff; margin-top:4px; }}
+        .live-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:#10a37f; margin-right:6px; animation:pulse 1.5s infinite; }}
+        @keyframes pulse {{ 0%,100%{{opacity:1;}} 50%{{opacity:.35;}} }}
+        table {{ width:100%; border-collapse:collapse; background:#141414; border:1px solid #2a2a2a; border-radius:10px; overflow:hidden; font-size:12px; }}
+        th, td {{ padding:8px 10px; text-align:left; border-bottom:1px solid #222; }}
+        th {{ color:#9ca3af; font-size:11px; text-transform:uppercase; background:#101010; }}
+        code {{ color:#93c5fd; font-family:monospace; }}
+      </style>
+    </head>
+    <body>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:12px; color:#9ca3af;">
+        <span><span class="live-dot"></span>Streaming live from <code>outputs/audit_trail.jsonl</code> (auto-refresh 2s)</span>
+        <span id="last-sync">Connecting...</span>
+      </div>
+      <div class="grid">
+        <div class="kpi"><div class="lbl">Live Spend (USD)</div><div class="val" id="k-cost" style="color:#10a37f;">$0.00000</div></div>
+        <div class="kpi"><div class="lbl">Live Tokens Used</div><div class="val" id="k-tok">0</div></div>
+        <div class="kpi"><div class="lbl">Saved vs. All-gpt-4o</div><div class="val" id="k-save" style="color:#93c5fd;">$0.00000</div></div>
+        <div class="kpi"><div class="lbl">Logged Runs / Events</div><div class="val" id="k-evt">0</div></div>
+      </div>
+      <table>
+        <thead><tr><th>Timestamp</th><th>Document / Event</th><th>Scope / Ticket</th><th>Tokens</th><th>Cost (USD)</th></tr></thead>
+        <tbody id="finops-rows"><tr><td colspan="5" style="color:#8e8e8e;">Loading live telemetry...</td></tr></tbody>
+      </table>
+      <script>
+        async function pollFinops() {{
+          try {{
+            const resp = await fetch('http://127.0.0.1:{finops_port}/api/finops');
+            if (!resp.ok) return;
+            const d = await resp.json();
+            document.getElementById('k-cost').innerText = '$' + Number(d.total_cost_usd || 0).toFixed(5);
+            document.getElementById('k-tok').innerText = Number(d.total_tokens || 0).toLocaleString();
+            document.getElementById('k-save').innerText = '$' + Number(d.saved_usd || 0).toFixed(5);
+            document.getElementById('k-evt').innerText = String(d.total_events || 0);
+            document.getElementById('last-sync').innerText = 'Last updated: ' + new Date().toLocaleTimeString();
+            const tbody = document.getElementById('finops-rows');
+            const rows = d.recent || [];
+            if (!rows.length) {{
+              tbody.innerHTML = '<tr><td colspan="5" style="color:#8e8e8e;">No telemetry events logged yet.</td></tr>';
+            }} else {{
+              tbody.innerHTML = rows.map(r => `
+                <tr>
+                  <td><code>${{r.timestamp || '-'}}</code></td>
+                  <td>${{r.label}}</td>
+                  <td><code>${{r.ticket}}</code></td>
+                  <td>${{Number(r.tokens || 0).toLocaleString()}}</td>
+                  <td style="color:#10a37f; font-weight:700;">$${{Number(r.cost || 0).toFixed(5)}}</td>
+                </tr>
+              `).join('');
+            }}
+          }} catch (e) {{}}
+        }}
+        pollFinops();
+        setInterval(pollFinops, 2000);
+      </script>
+    </body>
+    </html>
+    """
+    components.html(live_monitor_html, height=340, scrolling=True)
 
 
 def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
