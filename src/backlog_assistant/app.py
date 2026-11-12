@@ -2043,7 +2043,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         "NEW": {"name": "Extractor Agent", "initials": "EA", "color": "#0c66e4"},
     }
 
-    for s in latest.stories:
+    for s in (latest.stories if latest.metadata.scenario_id == cfg.scenario_id else []):
         if s.requires_human_approval:
             col_key = "hitl"
         elif s.backlog_alignment == BacklogAlignment.NEW:
@@ -3445,9 +3445,14 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
 
     dataset = ev.load_dataset()
     has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    runs_dir = (
+        ev.DEFAULT_RUNS_DIR
+        if cfg.scenario_id == "smart_backlog_assistant"
+        else ev.DEFAULT_RUNS_DIR / cfg.scenario_id
+    )
 
     # ---------------- Compact Run Controls ----------------
-    with st.expander("▶️ Run a New Evaluation", expanded=not bool(ev.list_runs())):
+    with st.expander("▶️ Run a New Evaluation", expanded=not bool(ev.list_runs(runs_dir))):
         c1, c2, c3, c4 = st.columns([1.4, 1.0, 1.0, 1.6])
         with c1:
             mode = st.radio(
@@ -3491,9 +3496,10 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
                     judge_enabled=judge_on,
                     judge_model=judge_model,
                     case_ids=sel_cases,
+                    runs_dir=runs_dir,
                     progress_cb=_cb,
                 )
-            st.session_state["eval_selected_run"] = new_run.run_id
+            st.session_state[f"eval_selected_run_{cfg.scenario_id}"] = new_run.run_id
             st.success(f"Finished: {new_run.summary.passed} / {new_run.summary.total_cases} tests passed.")
 
     with st.expander(f"📚 Evaluation Set ({len(dataset.cases)} Test Cases — Browse & Add Cases)", expanded=False):
@@ -3717,17 +3723,17 @@ document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeDs(); 
                             st.error(str(err))
 
     # ---------------- Run Selection ----------------
-    run_files = ev.list_runs()
+    run_files = ev.list_runs(runs_dir)
     if not run_files:
-        st.info("No evaluation runs yet. Open **Run a New Evaluation** above to start.")
+        st.info(f"No evaluation runs yet for **{cfg.project_title}**. Open **Run a New Evaluation** above to start.")
         return
     run_ids = [p.stem for p in run_files]
-    default_id = st.session_state.get("eval_selected_run", run_ids[0])
+    default_id = st.session_state.get(f"eval_selected_run_{cfg.scenario_id}", run_ids[0])
     runs_cache: dict[str, Any] = {}
 
     def _load(run_id: str) -> Any:
         if run_id not in runs_cache:
-            runs_cache[run_id] = ev.load_run(ev.DEFAULT_RUNS_DIR / f"{run_id}.json")
+            runs_cache[run_id] = ev.load_run(runs_dir / f"{run_id}.json")
         return runs_cache[run_id]
 
     def _label(run_id: str) -> str:
@@ -3746,7 +3752,7 @@ document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeDs(); 
         run_ids,
         index=run_ids.index(default_id) if default_id in run_ids else 0,
         format_func=_label,
-        key="eval_run_select",
+        key=f"eval_run_select_{cfg.scenario_id}",
     )
     run = _load(sel_run_id)
     s = run.summary
@@ -4227,7 +4233,7 @@ def build_unified_events(
         if include_offline or not latest_is_offline:
             src_file = Path(latest.metadata.source_file).name
             ts_val = datetime.now(timezone.utc).isoformat()
-            for s in latest.stories:
+            for s in (latest.stories if latest.metadata.scenario_id == cfg.scenario_id else []):
                 if s.backlog_alignment == BacklogAlignment.CONFLICT:
                     events.append({
                         "severity": "ERROR_CONFLICT",
@@ -4655,6 +4661,8 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
             sel_path = projects[sel_label]
             if sel_path != st.session_state.get("active_project_path"):
                 st.session_state["active_project_path"] = sel_path
+                st.session_state.pop("latest_result", None)
+                st.session_state.pop("active_doc_path", None)
                 st.rerun()
 
             base_cfg = load_scenario_config(sel_path)
@@ -4683,7 +4691,7 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
             new_model = s4.selectbox("AI Model", model_opts, index=model_opts.index(cur_model), key=f"set_mod_{sel_path}")
             pii_guard = s5.toggle("🛡️ Privacy PII Shield", value=base_cfg.enable_pii_redaction, key=f"set_pii_{sel_path}")
 
-            cfg = base_cfg.with_overrides({
+            overrides: dict[str, Any] = {
                 "project_title": new_title.strip() or base_cfg.project_title,
                 "domain_name": new_domain.strip() or base_cfg.domain_name,
                 "id_prefix": new_prefix.strip().upper() or base_cfg.id_prefix,
@@ -4691,7 +4699,10 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
                 "subagent_models.extractor_agent": new_model,
                 "subagent_models.backlog_auditor": new_model,
                 "enable_pii_redaction": pii_guard,
-            })
+            }
+            if base_cfg.scenario_id != "smart_backlog_assistant" and base_cfg.paths.audit_log_path == "outputs/audit_trail.jsonl":
+                overrides["paths.audit_log_path"] = f"outputs/projects/{base_cfg.scenario_id}_audit_trail.jsonl"
+            cfg = base_cfg.with_overrides(overrides)
 
             if st.button("💾 Save Project Settings", key=f"save_proj_{sel_path}"):
                 Path(sel_path).write_text(cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -4721,6 +4732,7 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
                             cfg_path.parent.mkdir(parents=True, exist_ok=True)
                             backlog_path.parent.mkdir(parents=True, exist_ok=True)
                             backlog_path.write_text("[]\n", encoding="utf-8")
+                            audit_path = Path("outputs/projects") / f"{slug}_audit_trail.jsonl"
                             new_cfg = load_scenario_config("config/scenario_config.json").with_overrides({
                                 "scenario_id": slug,
                                 "project_title": p_name.strip(),
@@ -4731,9 +4743,12 @@ def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
                                 "subagent_models.extractor_agent": p_model,
                                 "subagent_models.backlog_auditor": p_model,
                                 "paths.baseline_backlog": str(backlog_path).replace("\\", "/"),
+                                "paths.audit_log_path": str(audit_path).replace("\\", "/"),
                             })
                             cfg_path.write_text(new_cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
                             st.session_state["active_project_path"] = str(cfg_path).replace("\\", "/")
+                            st.session_state.pop("latest_result", None)
+                            st.session_state.pop("active_doc_path", None)
                             st.success(f"✅ Created project **{p_name.strip()}**!")
                             st.rerun()
 
@@ -4761,9 +4776,32 @@ def render_portal() -> None:
     with tab_settings:
         cfg, offline = render_settings_and_custom_upload_tab()
 
-    latest: BacklogAnalysisResult = st.session_state["latest_result"]
+    _CHAT_SERVER_STATE["cfg"] = cfg
+    latest: BacklogAnalysisResult | None = st.session_state.get("latest_result")
+    if latest is None or latest.metadata.scenario_id != cfg.scenario_id:
+        latest = BacklogAnalysisResult(
+            summary={
+                "document_title": f"{cfg.project_title} Workspace",
+                "executive_summary": f"Active workspace for {cfg.project_title}.",
+                "key_themes": [],
+                "risks_and_dependencies": [],
+                "open_questions": [],
+            },
+            stories=[],
+            metadata={
+                "scenario_id": cfg.scenario_id,
+                "source_file": "none",
+                "execution_mode": "offline",
+                "model_name": cfg.llm_model,
+                "prompt_version": getattr(cfg, "prompt_version", "v1.0"),
+                "latency_ms": 0,
+                "existing_backlog_count": len(load_existing_backlog(cfg.paths.baseline_backlog)),
+            },
+        )
+        st.session_state["latest_result"] = latest
     history = load_audit_history(cfg.paths.audit_log_path)
     bundle = build_all_scenarios_bundle(cfg)
+    _CHAT_SERVER_STATE["bundle"] = bundle
 
     with tab_chat:
         render_chatgpt_conversational_first_tab(cfg, bundle)
