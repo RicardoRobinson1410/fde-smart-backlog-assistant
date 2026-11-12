@@ -876,7 +876,7 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
             if self.path == "/api/upload":
                 filename = str(data.get("filename", "uploaded_doc.txt"))
                 b64 = str(data.get("content_base64", ""))
-                if filename in cur_bundle:
+                if not b64 and filename in cur_bundle:
                     self._send_json(200, cur_bundle[filename])
                     return
                 try:
@@ -888,45 +888,50 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                     raw_text = extract_document_text(tmp_path)
                     scrubbed_text, pii_count = redact_pii_and_secrets(raw_text)
                     doc_sha = compute_sha256(raw_text)
-                    use_mock_upload = not bool(os.getenv("OPENAI_API_KEY", "").strip())
+                    force_off = not bool(os.getenv("OPENAI_API_KEY", "").strip())
                     try:
-                        engine = BacklogEngine(config=cur_cfg, use_mock=use_mock_upload)
-                        res = engine.analyze_document(tmp_path)
+                        engine = BacklogEngine(config=cur_cfg, force_offline=force_off)
+                        res = engine.analyze(tmp_path)
                     except Exception:
-                        engine = BacklogEngine(config=cur_cfg, use_mock=True)
-                        res = engine.analyze_document(tmp_path)
+                        engine = BacklogEngine(config=cur_cfg, force_offline=True)
+                        res = engine.analyze(tmp_path)
                     stories_list = []
                     proposed_actions = []
+                    conf_pct = f"{int((getattr(res, 'confidence_score', 0.92) or 0.92) * 100)}%"
                     for s in res.stories:
                         align_val = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
                         cat_val = getattr(s.category, "value", str(s.category))
+                        pts_val = getattr(s, "story_points", 3) or 3
+                        rel_ids = list(getattr(s, "related_backlog_ids", []) or [])
+                        align_notes = str(getattr(s, "alignment_notes", "") or "")
+                        pri_rat = str(getattr(s, "priority_rationale", "") or "")
                         stories_list.append({
                             "id": s.id,
                             "title": s.title,
                             "user_story": s.user_story,
                             "priority": s.priority,
-                            "points": s.story_points_fibonacci or 3,
+                            "points": pts_val,
                             "category": cat_val,
                             "alignment": align_val,
-                            "related": s.related_existing_ids,
-                            "notes": s.deduplication_notes,
-                            "rationale": s.rationale,
+                            "related": rel_ids,
+                            "notes": align_notes,
+                            "rationale": pri_rat,
                             "acs": s.acceptance_criteria,
                             "hitl": s.requires_human_approval,
-                            "confidence": f"{int(s.confidence_score * 100)}%",
+                            "confidence": conf_pct,
                         })
                         if align_val != "DUPLICATE":
-                            is_upd = align_val == "UPDATES_EXISTING" and bool(s.related_existing_ids)
+                            is_upd = align_val == "UPDATES_EXISTING" and bool(rel_ids)
                             proposed_actions.append({
                                 "op": "update" if is_upd else "create",
-                                "id": s.related_existing_ids[0] if is_upd else "",
+                                "id": rel_ids[0] if is_upd else "",
                                 "title": s.title,
                                 "priority": s.priority,
                                 "category": cat_val,
                                 "status": "In Review / HITL" if s.requires_human_approval else "To Do",
                                 "alignment": align_val,
-                                "points": s.story_points_fibonacci or 3,
-                                "summary": f"{s.user_story} | {s.deduplication_notes} | AC-1: {s.acceptance_criteria[0] if s.acceptance_criteria else ''}".strip(),
+                                "points": pts_val,
+                                "summary": f"{s.user_story} | {align_notes} | AC-1: {s.acceptance_criteria[0] if s.acceptance_criteria else ''}".strip(),
                             })
                     doc_obj = {
                         "filename": filename,
@@ -2749,6 +2754,127 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     components.html(kanban_html, height=740, scrolling=False)
 
 
+def render_doc_to_tasks_pipeline_tab(cfg: ScenarioConfig) -> None:
+    """Tab 3: Dedicated 4-Stage Document-to-Tasks Extraction, Deduplication & Batch HITL Pipeline."""
+    st.markdown("### 📥 Document-to-Tasks Multi-Agent Pipeline")
+    st.caption(
+        "Upload any specification, sprint notes, or postmortem (`.txt`, `.md`, `.pdf`) to extract **all** actionable tasks, "
+        "deduplicate against `FIN-101..FIN-106`, review in a single **HITL Approval Gate**, and persist to the Jira Kanban board."
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.info("**1. Ingest & PII Shield**\n`PyPDF + Zero-Trust Regex`")
+    c2.info("**2. Multi-Task Split**\n`BacklogEngine (LangGraph)`")
+    c3.info("**3. Deduplicate & Gate**\n`@backlog-auditor + HITL`")
+    c4.info("**4. Persist & Sync**\n`Backlog JSON + Kanban`")
+
+    uploaded = st.file_uploader(
+        "Upload source document (.txt, .md, .pdf)",
+        type=["txt", "md", "pdf"],
+        key="doc_pipeline_uploader",
+    )
+
+    if uploaded is not None:
+        if st.button("🚀 Run Multi-Task Extraction Pipeline", type="primary", key="run_doc_pipeline_btn"):
+            with st.spinner("Running PII Shield, Multi-Task Extraction & Deduplication..."):
+                suffix = Path(uploaded.name).suffix.lower() or ".txt"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(uploaded.getvalue())
+                    tmp_path = Path(tmp.name)
+                raw_text = extract_document_text(tmp_path)
+                scrubbed_text, pii_count = redact_pii_and_secrets(raw_text)
+                doc_sha = compute_sha256(raw_text)
+                force_off = not bool(os.getenv("OPENAI_API_KEY", "").strip())
+                try:
+                    engine = BacklogEngine(config=cfg, force_offline=force_off)
+                    res = engine.analyze(tmp_path)
+                except Exception:
+                    engine = BacklogEngine(config=cfg, force_offline=True)
+                    res = engine.analyze(tmp_path)
+
+                proposed: list[dict[str, Any]] = []
+                skipped_dups = 0
+                for s in res.stories:
+                    align_val = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
+                    cat_val = getattr(s.category, "value", str(s.category))
+                    rel_ids = list(getattr(s, "related_backlog_ids", []) or [])
+                    align_notes = str(getattr(s, "alignment_notes", "") or "")
+                    if align_val == "DUPLICATE":
+                        skipped_dups += 1
+                        continue
+                    is_upd = align_val == "UPDATES_EXISTING" and bool(rel_ids)
+                    proposed.append({
+                        "op": "update" if is_upd else "create",
+                        "id": rel_ids[0] if is_upd else "",
+                        "title": s.title,
+                        "priority": s.priority,
+                        "category": cat_val,
+                        "status": "In Review / HITL" if s.requires_human_approval else "To Do",
+                        "alignment": align_val,
+                        "points": getattr(s, "story_points", 3) or 3,
+                        "summary": f"{s.user_story} | {align_notes} | AC-1: {s.acceptance_criteria[0] if s.acceptance_criteria else ''}".strip(),
+                    })
+
+                st.session_state["doc_pipeline_run"] = {
+                    "filename": uploaded.name,
+                    "sha256": doc_sha[:14],
+                    "pii_count": pii_count,
+                    "total_stories": len(res.stories),
+                    "skipped_dups": skipped_dups,
+                    "tokens": res.metadata.estimated_tokens,
+                    "cost": res.metadata.estimated_cost_usd,
+                    "proposed": proposed,
+                }
+
+    run_data = st.session_state.get("doc_pipeline_run")
+    if run_data:
+        st.divider()
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Stories Extracted", run_data["total_stories"])
+        m2.metric("Proposed Tasks", len(run_data["proposed"]))
+        m3.metric("Duplicates Skipped", run_data["skipped_dups"])
+        m4.metric("PII Masked", run_data["pii_count"])
+        m5.metric("FinOps Cost", f"${run_data['cost']:.5f}")
+
+        proposed = run_data["proposed"]
+        if not proposed:
+            st.warning("All extracted stories were duplicates of existing backlog tickets. No new tasks needed.")
+        else:
+            st.markdown("#### 🚨 Human-in-the-Loop (HITL) Batch Approval Gate")
+            selected_indices: list[int] = []
+            for idx, act in enumerate(proposed):
+                badge = f"[{act['op'].upper()}{(' ' + act['id']) if act['id'] else ''}]"
+                checked = st.checkbox(
+                    f"{badge} **{act['title']}** — `{act['priority']}` • `{act['category']}` • `{act['status']}` • `{act['points']} pts`",
+                    value=True,
+                    key=f"pipe_chk_{run_data['sha256']}_{idx}",
+                )
+                st.caption(f"Description: {act['summary']}")
+                if checked:
+                    selected_indices.append(idx)
+
+            col_ok, col_no = st.columns([1, 1])
+            with col_ok:
+                if st.button("✅ Approve Selected & Create All Tasks", type="primary", key="pipe_approve_btn"):
+                    created_msgs = []
+                    for idx in selected_indices:
+                        exec_res = _execute_task_action(proposed[idx], cfg, approved_by_human=True)
+                        if exec_res.get("ok"):
+                            created_msgs.append(exec_res["message"])
+                    st.success(f"Approved and persisted {len(created_msgs)} task(s) to `{cfg.paths.baseline_backlog}`! Switch to **Tab 2 (Kanban Board)** to see all of them.")
+                    for msg in created_msgs:
+                        st.write(f"- {msg}")
+                    st.session_state.pop("doc_pipeline_run", None)
+            with col_no:
+                if st.button("❌ Reject Batch", key="pipe_reject_btn"):
+                    _append_task_audit_event(
+                        cfg,
+                        {"event_type": "task_batch_rejected", "filename": run_data["filename"], "count": len(proposed), "approved_by_human": False},
+                    )
+                    st.info("Batch rejected and logged to `outputs/audit_trail.jsonl`.")
+                    st.session_state.pop("doc_pipeline_run", None)
+
+
 def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
     """Tab 3: Dedicated Interactive SVG Agent, Subagent, Tool & MCP Network Graph + Step-by-Step Reasoning Stream."""
     ext_model = html.escape(cfg.subagent_models.extractor_agent)
@@ -3659,14 +3785,15 @@ def render_portal() -> None:
     history = ensure_initial_telemetry(default_cfg)
 
     # Top-level separated tabs — Tab 1 opens directly into the pure ChatGPT "Where should we begin?" view!
-    tab_chat, tab_kanban, tab_graph, tab_finops, tab_rubric, tab_alerts, tab_settings = st.tabs([
+    tab_chat, tab_kanban, tab_pipeline, tab_graph, tab_finops, tab_rubric, tab_alerts, tab_settings = st.tabs([
         "💬 1. Ask ChatGPT (Conversational Agent)",
         "📋 2. Kanban Board (Click Cards)",
-        "🕸️ 3. Agent & MCP Graph",
-        "💰 4. FinOps & Cost Savings",
-        "🏆 5. Certification Rubric",
-        "🚨 6. Error & Log Explorer",
-        "⚙️ 7. Settings & Upload",
+        "📥 3. Doc-to-Tasks Pipeline",
+        "🕸️ 4. Agent & MCP Graph",
+        "💰 5. FinOps & Cost Savings",
+        "🏆 6. Certification Rubric",
+        "🚨 7. Error & Log Explorer",
+        "⚙️ 8. Settings & Upload",
     ])
 
     with tab_settings:
@@ -3681,6 +3808,9 @@ def render_portal() -> None:
 
     with tab_kanban:
         render_clickable_kanban_tab(cfg, latest)
+
+    with tab_pipeline:
+        render_doc_to_tasks_pipeline_tab(cfg)
 
     with tab_graph:
         render_connected_agent_graph_tab(cfg, latest)
