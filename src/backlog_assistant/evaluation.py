@@ -187,6 +187,23 @@ def load_dataset(path: str | Path = DEFAULT_DATASET_PATH) -> GoldenDataset:
     return GoldenDataset.model_validate(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def next_case_id(dataset: GoldenDataset) -> str:
+    """Return the next sequential EV-NNN case ID."""
+    nums = [int(m.group(1)) for c in dataset.cases if (m := re.match(r"^EV-(\d+)$", c.id))]
+    return f"EV-{(max(nums, default=0) + 1):03d}"
+
+
+def add_case_to_dataset(case: EvalCase, path: str | Path = DEFAULT_DATASET_PATH) -> GoldenDataset:
+    """Validate and append a new EvalCase to the golden dataset JSON file."""
+    p = Path(path)
+    ds = load_dataset(p)
+    if any(c.id == case.id for c in ds.cases):
+        raise ValueError(f"Case ID '{case.id}' already exists in {p}.")
+    ds.cases.append(case)
+    p.write_text(ds.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return ds
+
+
 def price_usage(usage: dict[str, Any]) -> tuple[int, int, float, list[str]]:
     """Convert LangChain usage-metadata ({model: {input_tokens, output_tokens}}) into real USD cost."""
     in_tok = out_tok = 0

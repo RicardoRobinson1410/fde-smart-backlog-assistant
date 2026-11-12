@@ -3496,43 +3496,225 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
             st.session_state["eval_selected_run"] = new_run.run_id
             st.success(f"Finished: {new_run.summary.passed} / {new_run.summary.total_cases} tests passed.")
 
-    with st.expander(f"📚 Preview Evaluation Set ({len(dataset.cases)} Test Cases — Before Running)", expanded=False):
+    with st.expander(f"📚 Evaluation Set ({len(dataset.cases)} Test Cases — Browse & Add Cases)", expanded=False):
         st.caption(
             f"Source: `evals/golden_dataset.json` (v{dataset.dataset_version}) • "
             f"Frozen backlog fixture: `{dataset.backlog_fixture}`"
         )
-        st.dataframe(
-            [
-                {
-                    "ID": dc.id,
-                    "Test Case": dc.name,
-                    "Category": dc.category,
-                    "Why We Test This": dc.why_it_matters,
-                    "Expected Stories": f"{dc.expectations['story_count'][0]}–{dc.expectations['story_count'][1]}"
-                    if "story_count" in dc.expectations
-                    else "—",
-                }
-                for dc in dataset.cases
-            ],
-            hide_index=True,
-            width="stretch",
-        )
-        preview_map = {dc.id: dc for dc in dataset.cases}
-        prev_id = st.selectbox(
-            "Inspect a case from the dataset",
-            [dc.id for dc in dataset.cases],
-            format_func=lambda cid: f"{cid} — {preview_map[cid].name} ({preview_map[cid].category})",
-            key="eval_preview_case_id",
-        )
-        pdc = preview_map[prev_id]
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            st.markdown("**📄 Input Document**")
-            st.text_area("Document", value=pdc.document, height=180, disabled=True, key=f"prev_doc_{pdc.id}")
-        with pc2:
-            st.markdown("**🎯 What Should Happen**")
-            st.info(pdc.reference_notes)
-            st.caption(f"Format: `.{pdc.source_format}` • Checks: {', '.join(pdc.expectations.keys())}")
+        tab_browse, tab_add = st.tabs(["📋 Browse Test Cases", "➕ Add New Test Case"])
+
+        with tab_browse:
+            ds_payload = []
+            for dc in dataset.cases:
+                exp = dc.expectations
+                checks_list = []
+                if "story_count" in exp:
+                    checks_list.append(f"Expected stories: {exp['story_count'][0]}–{exp['story_count'][1]}")
+                if exp.get("required_topics"):
+                    checks_list.append("Must cover: " + ", ".join(t["label"] for t in exp["required_topics"]))
+                if exp.get("backlog_links"):
+                    checks_list.append("Must link to: " + ", ".join(f"{l['backlog_id']} ({'/'.join(l['alignment'])})" for l in exp["backlog_links"]))
+                if exp.get("hitl_required"):
+                    checks_list.append("Human approval (HITL) required")
+                if exp.get("min_open_questions"):
+                    checks_list.append(f"Min open questions: {exp['min_open_questions']}")
+                if exp.get("numeric_grounding"):
+                    checks_list.append("No invented numbers/SLAs allowed")
+                if exp.get("sensitive_values"):
+                    checks_list.append("PII/secrets must be masked before LLM & absent from output")
+                if exp.get("must_not_contain"):
+                    checks_list.append("Prompt injection must be ignored")
+                ds_payload.append({
+                    "id": dc.id,
+                    "name": dc.name,
+                    "category": dc.category,
+                    "format": dc.source_format,
+                    "why": dc.why_it_matters,
+                    "document": dc.document,
+                    "reference": dc.reference_notes,
+                    "checks": checks_list,
+                    "story_range": f"{exp['story_count'][0]}–{exp['story_count'][1]}" if "story_count" in exp else "Any",
+                })
+
+            ds_json = json.dumps(ds_payload, ensure_ascii=False).replace("</", "<\\/")
+            ds_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: transparent; color: #e2e8f0; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }}
+  .card {{
+    background: #141417; border: 1px solid #2b2b30; border-radius: 10px; padding: 12px 14px;
+    cursor: pointer; transition: border-color 0.14s ease, background 0.14s ease;
+    display: flex; flex-direction: column; justify-content: space-between; gap: 6px;
+  }}
+  .card:hover {{ background: #1c2230; border-color: #3b82f6; }}
+  .card-top {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; }}
+  .cid {{ font-weight: 700; font-size: 13px; color: #60a5fa; }}
+  .cat {{ background: #27272a; color: #cbd5e1; padding: 2px 8px; border-radius: 999px; font-size: 11px; }}
+  .cname {{ font-weight: 600; font-size: 13.5px; color: #f8fafc; line-height: 1.35; }}
+  .cwhy {{ font-size: 12px; color: #94a3b8; line-height: 1.45; }}
+  .cfoot {{ font-size: 11.5px; color: #64748b; display: flex; justify-content: space-between; margin-top: 2px; }}
+  .modal-bg {{
+    display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.78);
+    backdrop-filter: blur(4px); padding: 14px; overflow-y: auto; align-items: flex-start; justify-content: center;
+  }}
+  .modal-bg.open {{ display: flex; }}
+  .modal {{
+    width: 100%; max-width: 920px; background: #141414; border: 1px solid #2e2e32;
+    border-radius: 14px; overflow: hidden; margin: auto 0; box-shadow: 0 20px 50px rgba(0,0,0,0.65);
+  }}
+  .mhdr {{
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 12px 16px; background: #1a1a1d; border-bottom: 1px solid #2b2b2b;
+  }}
+  .btn {{ background: #27272a; color: #e2e8f0; border: 1px solid #3f3f46; border-radius: 8px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; }}
+  .btn:hover {{ background: #3f3f46; }}
+  .btn-close {{ background: #991b1b; border-color: #ef4444; color: #fff; }}
+  .mbody {{ padding: 14px 16px; max-height: 75vh; overflow-y: auto; }}
+  .cols {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 10px; }}
+  .box {{ background: #18181b; border: 1px solid #2b2b2b; border-radius: 10px; padding: 12px; }}
+  .pre {{
+    background: #0f0f12; border: 1px solid #26262a; border-radius: 8px; padding: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #cbd5e1;
+    white-space: pre-wrap; max-height: 220px; overflow-y: auto; line-height: 1.45;
+  }}
+  ul {{ margin: 6px 0 0 18px; padding: 0; font-size: 12.5px; color: #cbd5e1; }}
+  li {{ margin-bottom: 4px; }}
+</style>
+</head>
+<body>
+<div class="grid" id="dsGrid"></div>
+<div id="dsModal" class="modal-bg" onclick="if(event.target===this) closeDs()">
+  <div class="modal">
+    <div class="mhdr">
+      <div id="dsTitle" style="font-weight:700;font-size:15px;color:#fff;"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" id="dsPrev" onclick="stepDs(-1)">← Prev</button>
+        <button class="btn" id="dsNext" onclick="stepDs(1)">Next →</button>
+        <button class="btn btn-close" onclick="closeDs()">✕ Close</button>
+      </div>
+    </div>
+    <div class="mbody" id="dsBody"></div>
+  </div>
+</div>
+<script>
+const DS = {ds_json};
+let cur = -1;
+function esc(s) {{ return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }}
+document.getElementById("dsGrid").innerHTML = DS.map((c, i) => `
+  <div class="card" onclick="openDs(${{i}})">
+    <div class="card-top"><span class="cid">${{esc(c.id)}}</span><span class="cat">${{esc(c.category)}}</span></div>
+    <div class="cname">${{esc(c.name)}}</div>
+    <div class="cwhy">${{esc(c.why)}}</div>
+    <div class="cfoot"><span>Stories: ${{esc(c.story_range)}} • .${{esc(c.format)}}</span><span style="color:#60a5fa;font-weight:600;">Preview →</span></div>
+  </div>
+`).join("");
+function openDs(i) {{
+  cur = i;
+  const c = DS[i];
+  document.getElementById("dsTitle").innerHTML = `${{esc(c.id)}} — ${{esc(c.name)}} <span class="cat" style="margin-left:8px;">${{esc(c.category)}}</span>`;
+  document.getElementById("dsPrev").disabled = i <= 0;
+  document.getElementById("dsNext").disabled = i >= DS.length - 1;
+  const chk = c.checks.length ? `<ul style="margin-top:8px;">${{c.checks.map(x => `<li>${{esc(x)}}</li>`).join("")}}</ul>` : "";
+  document.getElementById("dsBody").innerHTML = `
+    <div style="border-left:4px solid #3b82f6;background:#18181b;padding:10px 12px;border-radius:8px;font-size:13px;color:#cbd5e1;">
+      <strong>Why we test this:</strong> ${{esc(c.why)}}
+    </div>
+    <div class="cols">
+      <div class="box">
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px;">📄 Input Document (.${{esc(c.format)}})</div>
+        <div class="pre">${{esc(c.document)}}</div>
+      </div>
+      <div class="box">
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px;">🎯 What Should Happen</div>
+        <div style="font-size:12.5px;color:#cbd5e1;line-height:1.5;">${{esc(c.reference)}}</div>
+        ${{chk}}
+      </div>
+    </div>
+  `;
+  document.getElementById("dsModal").classList.add("open");
+}}
+function stepDs(d) {{ const n = cur + d; if (n >= 0 && n < DS.length) openDs(n); }}
+function closeDs() {{ document.getElementById("dsModal").classList.remove("open"); }}
+document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeDs(); }});
+</script>
+</body>
+</html>"""
+            components.html(ds_html, height=480, scrolling=True)
+
+        with tab_add:
+            st.markdown("Create a new golden test case and save it directly to `evals/golden_dataset.json`.")
+            suggested_id = ev.next_case_id(dataset)
+            backlog_choices = ["(None)"] + [b.id for b in ev.load_existing_backlog(dataset.backlog_fixture)]
+            with st.form("add_eval_case_form", clear_on_submit=True):
+                ac1, ac2, ac3 = st.columns([0.8, 1.8, 1.2])
+                new_id = ac1.text_input("Case ID", value=suggested_id)
+                new_name = ac2.text_input("Case Name", placeholder="e.g. Refund webhook idempotency")
+                new_cat = ac3.selectbox(
+                    "Category",
+                    ["Extraction", "Deduplication", "Conflict", "Safety - PII", "Safety - Injection",
+                     "Anti-Hallucination", "Precision", "Prioritization", "Robustness"],
+                )
+                new_why = st.text_input(
+                    "Why we test this",
+                    placeholder="Explain what failure mode or requirement this test catches.",
+                )
+                new_doc = st.text_area(
+                    "Input Document",
+                    height=130,
+                    placeholder="Paste meeting notes, postmortem excerpt, or requirement snippet...",
+                )
+                new_ref = st.text_area(
+                    "What Should Happen (Reference Notes for AI Judge)",
+                    height=90,
+                    placeholder="Describe the ideal stories, alignments, priorities, and open questions...",
+                )
+                oc1, oc2, oc3, oc4 = st.columns(4)
+                min_s = oc1.number_input("Min stories", min_value=0, max_value=10, value=1)
+                max_s = oc2.number_input("Max stories", min_value=0, max_value=10, value=3)
+                link_bid = oc3.selectbox("Expected backlog link", backlog_choices)
+                link_align = oc4.selectbox("Expected alignment", ["UPDATES_EXISTING", "DUPLICATE", "CONFLICT"])
+                oc5, oc6, oc7 = st.columns([1.8, 1.0, 1.0])
+                req_kws = oc5.text_input("Required topic keywords (comma-separated)", placeholder="e.g. refund, idempotency")
+                need_hitl = oc6.checkbox("Require HITL approval", value=False)
+                min_oq = oc7.number_input("Min open questions", min_value=0, max_value=10, value=0)
+
+                submitted = st.form_submit_button("➕ Save Test Case to Golden Dataset", type="primary")
+                if submitted:
+                    if not new_name.strip() or not new_doc.strip() or not new_ref.strip():
+                        st.error("Please fill in **Case Name**, **Input Document**, and **What Should Happen**.")
+                    elif max_s < min_s:
+                        st.error("Max stories must be >= Min stories.")
+                    else:
+                        exps: dict[str, Any] = {"story_count": [int(min_s), int(max_s)]}
+                        kws = [k.strip() for k in req_kws.split(",") if k.strip()]
+                        if kws:
+                            exps["required_topics"] = [{"label": kws[0], "any_of": kws}]
+                        if link_bid != "(None)":
+                            exps["backlog_links"] = [{"backlog_id": link_bid, "alignment": [link_align]}]
+                        if need_hitl:
+                            exps["hitl_required"] = True
+                        if int(min_oq) > 0:
+                            exps["min_open_questions"] = int(min_oq)
+                        new_case = ev.EvalCase(
+                            id=new_id.strip(),
+                            name=new_name.strip(),
+                            category=new_cat,
+                            why_it_matters=new_why.strip() or "Custom user-added evaluation case.",
+                            source_format="txt",
+                            document=new_doc.strip(),
+                            reference_notes=new_ref.strip(),
+                            expectations=exps,
+                        )
+                        try:
+                            ev.add_case_to_dataset(new_case)
+                            st.success(f"✅ Added **{new_case.id} — {new_case.name}** to `evals/golden_dataset.json`!")
+                            st.rerun()
+                        except ValueError as err:
+                            st.error(str(err))
 
     # ---------------- Run Selection ----------------
     run_files = ev.list_runs()
