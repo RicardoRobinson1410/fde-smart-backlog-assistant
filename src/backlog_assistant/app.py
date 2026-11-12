@@ -3541,10 +3541,21 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
     if run.mode != "live_agent":
         st.info("This run used the **Offline Baseline** (no AI). Switch to **Live AI Agent** to evaluate the real model.")
 
-    # ---------------- Clean Results Overview Table ----------------
-    st.markdown("#### 📋 All Test Cases at a Glance")
+    # ---------------- Clean Clickable Results Overview Table ----------------
+    h_col, f_col = st.columns([2.2, 1.0])
+    with h_col:
+        st.markdown("#### 📋 All Test Cases at a Glance")
+        st.caption("👆 Click any row in the table to open a detailed popup for that test case.")
+    with f_col:
+        only_failed = st.checkbox("Show only failed tests", value=False, key="eval_only_failed")
+
+    shown_cases = [c for c in run.cases if not only_failed or c.status != "PASS"]
+    if not shown_cases:
+        st.success("All test cases passed! 🎉")
+        return
+
     overview_rows = []
-    for c in run.cases:
+    for c in shown_cases:
         failed_names = [ch.name for ch in c.checks if ch.status == "fail"]
         if c.judge:
             j_avg = sum(
@@ -3563,172 +3574,167 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
             "Time": f"{c.metrics.latency_ms / 1000:.1f}s",
             "Cost": f"${c.metrics.cost_usd + c.metrics.judge_cost_usd:.4f}",
         })
-    st.dataframe(overview_rows, hide_index=True, width="stretch")
 
-    # ---------------- Clear Single-Screen Case Inspector ----------------
-    st.markdown("#### 🔍 Inspect a Test Case")
-    f_col, s_col = st.columns([1.0, 2.5])
-    with f_col:
-        only_failed = st.checkbox("Show only failed tests", value=False, key="eval_only_failed")
-    shown = [c for c in run.cases if not only_failed or c.status != "PASS"]
-    if not shown:
-        st.success("All test cases passed! 🎉")
-        return
-
-    with s_col:
-        case_map = {c.case.id: c for c in shown}
-        sel_cid = st.selectbox(
-            "Choose a test case",
-            [c.case.id for c in shown],
-            format_func=lambda cid: f"{'✅' if case_map[cid].status == 'PASS' else '❌'} {cid} — {case_map[cid].case.name}",
-            key="eval_selected_case_id",
-            label_visibility="collapsed",
-        )
-    c = case_map[sel_cid]
-    failed_checks = [ch for ch in c.checks if ch.status == "fail"]
-    out = c.output or {}
-    summ = out.get("summary", {})
-    stories = out.get("stories", [])
-
-    # Clear Status & Why It Matters Banner
-    st_color = "#10a37f" if c.status == "PASS" else "#ef4444"
-    st.markdown(
-        f'<div style="border-left:4px solid {st_color};background:#161616;padding:12px 16px;border-radius:8px;margin:6px 0 12px 0;">'
-        f'<div style="font-size:1.05rem;font-weight:700;color:#fff;">{"✅ PASSED" if c.status == "PASS" else "❌ FAILED"} — {_html.escape(c.case.id)}: {_html.escape(c.case.name)}</div>'
-        f'<div style="font-size:0.86rem;color:#cbd5e1;margin-top:4px;"><strong>Why we test this:</strong> {_html.escape(c.case.why_it_matters)}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
+    table_event = st.dataframe(
+        overview_rows,
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"eval_table_{run.run_id}_{only_failed}",
     )
 
-    if c.error:
-        st.error(f"Agent error: {c.error}")
-    if failed_checks:
+    @st.dialog("Test Case Details", width="large")
+    def _show_case_popup(c: Any) -> None:
+        failed_checks = [ch for ch in c.checks if ch.status == "fail"]
+        out = c.output or {}
+        summ = out.get("summary", {})
+        stories = out.get("stories", [])
+
+        st_color = "#10a37f" if c.status == "PASS" else "#ef4444"
+        st.markdown(
+            f'<div style="border-left:4px solid {st_color};background:#161616;padding:12px 16px;border-radius:8px;margin-bottom:12px;">'
+            f'<div style="font-size:1.05rem;font-weight:700;color:#fff;">{"✅ PASSED" if c.status == "PASS" else "❌ FAILED"} — {_html.escape(c.case.id)}: {_html.escape(c.case.name)}</div>'
+            f'<div style="font-size:0.86rem;color:#cbd5e1;margin-top:4px;"><strong>Why we test this:</strong> {_html.escape(c.case.why_it_matters)}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        if c.error:
+            st.error(f"Agent error: {c.error}")
         for ch in failed_checks:
             ev_txt = f" — {', '.join(ch.evidence[:3])}" if ch.evidence else ""
             st.error(f"**Failed check: {ch.name}**  \nExpected: {ch.expected}  \nGot: {ch.actual}{ev_txt}")
 
-    # 3-Column Plain-English Comparison: Input | Expected | Actual
-    col_in, col_exp, col_act = st.columns(3)
-    with col_in:
-        with st.container(border=True):
-            st.markdown("##### 📄 1. Input Given")
-            if c.metrics.pii_redacted_count > 0:
-                st.success(f"🔒 {c.metrics.pii_redacted_count} sensitive item(s) masked before sending to AI")
-                st.text_area("Sanitized text sent to AI", value=c.sanitized_input, height=220, disabled=True, key=f"in_{c.case.id}")
-            else:
-                st.text_area("Document text", value=c.case.document, height=250, disabled=True, key=f"in_{c.case.id}")
+        col_in, col_exp, col_act = st.columns(3)
+        with col_in:
+            with st.container(border=True):
+                st.markdown("##### 📄 1. Input Given")
+                if c.metrics.pii_redacted_count > 0:
+                    st.success(f"🔒 {c.metrics.pii_redacted_count} sensitive item(s) masked before sending to AI")
+                    st.text_area("Sanitized text sent to AI", value=c.sanitized_input, height=210, disabled=True, key=f"pop_in_{c.case.id}")
+                else:
+                    st.text_area("Document text", value=c.case.document, height=240, disabled=True, key=f"pop_in_{c.case.id}")
 
-    with col_exp:
-        with st.container(border=True):
-            st.markdown("##### 🎯 2. What Should Happen")
-            st.markdown(c.case.reference_notes)
-            exp = c.case.expectations
-            bullets = []
-            if "story_count" in exp:
-                bullets.append(f"**Stories:** {exp['story_count'][0]}–{exp['story_count'][1]}")
-            if exp.get("required_topics"):
-                bullets.append("**Must cover:** " + ", ".join(t["label"] for t in exp["required_topics"]))
-            if exp.get("backlog_links"):
-                bullets.append("**Must link to:** " + ", ".join(f"{l['backlog_id']} ({'/'.join(l['alignment'])})" for l in exp["backlog_links"]))
-            if exp.get("hitl_required"):
-                bullets.append("**Human approval:** Required")
-            if exp.get("min_open_questions"):
-                bullets.append(f"**Open questions:** At least {exp['min_open_questions']}")
-            if bullets:
-                st.markdown("\n".join(f"- {b}" for b in bullets))
+        with col_exp:
+            with st.container(border=True):
+                st.markdown("##### 🎯 2. What Should Happen")
+                st.markdown(c.case.reference_notes)
+                exp = c.case.expectations
+                bullets = []
+                if "story_count" in exp:
+                    bullets.append(f"**Stories:** {exp['story_count'][0]}–{exp['story_count'][1]}")
+                if exp.get("required_topics"):
+                    bullets.append("**Must cover:** " + ", ".join(t["label"] for t in exp["required_topics"]))
+                if exp.get("backlog_links"):
+                    bullets.append("**Must link to:** " + ", ".join(f"{l['backlog_id']} ({'/'.join(l['alignment'])})" for l in exp["backlog_links"]))
+                if exp.get("hitl_required"):
+                    bullets.append("**Human approval:** Required")
+                if exp.get("min_open_questions"):
+                    bullets.append(f"**Open questions:** At least {exp['min_open_questions']}")
+                if bullets:
+                    st.markdown("\n".join(f"- {b}" for b in bullets))
 
-    with col_act:
-        with st.container(border=True):
-            st.markdown("##### 🤖 3. What Agent Produced")
-            st.caption(f"{len(stories)} stories • {len(summ.get('open_questions', []))} open questions")
-            if stories:
-                for s_ in stories:
-                    refs = f" (links to `{', '.join(s_.get('related_backlog_ids', []))}`)" if s_.get("related_backlog_ids") else ""
-                    hitl = " 🚨" if s_.get("requires_human_approval") else ""
-                    st.markdown(f"**{s_['id']}** `{s_['priority']}` `{s_['backlog_alignment']}`{refs}{hitl}  \n{s_['title']}")
-                    with st.expander("View story & acceptance criteria", expanded=False):
-                        st.markdown(f"_{s_['user_story']}_")
-                        for ac in s_.get("acceptance_criteria", []):
-                            st.markdown(f"- {ac}")
-            else:
-                st.info("No stories generated.")
-            if summ.get("open_questions"):
-                st.markdown("**Open questions asked:**")
-                for q in summ["open_questions"]:
-                    st.markdown(f"- ❓ {q}")
+        with col_act:
+            with st.container(border=True):
+                st.markdown("##### 🤖 3. What Agent Produced")
+                st.caption(f"{len(stories)} stories • {len(summ.get('open_questions', []))} open questions")
+                if stories:
+                    for s_ in stories:
+                        refs = f" (links to `{', '.join(s_.get('related_backlog_ids', []))}`)" if s_.get("related_backlog_ids") else ""
+                        hitl = " 🚨" if s_.get("requires_human_approval") else ""
+                        st.markdown(f"**{s_['id']}** `{s_['priority']}` `{s_['backlog_alignment']}`{refs}{hitl}  \n{s_['title']}")
+                        with st.expander("View story & acceptance criteria", expanded=False):
+                            st.markdown(f"_{s_['user_story']}_")
+                            for ac in s_.get("acceptance_criteria", []):
+                                st.markdown(f"- {ac}")
+                else:
+                    st.info("No stories generated.")
+                if summ.get("open_questions"):
+                    st.markdown("**Open questions asked:**")
+                    for q in summ["open_questions"]:
+                        st.markdown(f"- ❓ {q}")
 
-    # Automated Checks & AI Judge Feedback side by side
-    chk_col, jdg_col = st.columns([1.15, 1.0])
-    with chk_col:
-        st.markdown("##### ✅ Automated Checks")
-        st.dataframe(
-            [
-                {
-                    "Status": _eval_status_icon(ch.status),
-                    "Check": ch.name,
-                    "Details": ch.actual if ch.status == "pass" else f"Expected {ch.expected}; got {ch.actual}",
-                }
-                for ch in sorted(c.checks, key=lambda x: (x.status == "pass", x.name))
-                if ch.grader == "code"
-            ],
-            hide_index=True,
-            width="stretch",
-        )
-
-    with jdg_col:
-        st.markdown("##### ⚖️ AI Judge Feedback")
-        if c.judge is None:
-            st.info("AI Judge was not run for this evaluation.")
-        else:
-            dims = [
-                ("faithfulness", "Accuracy (No Hallucinations)"),
-                ("completeness", "Completeness"),
-                ("ac_testability", "Testable Criteria"),
-                ("story_quality", "Story Clarity"),
-                ("backlog_reasoning", "Backlog & Priority Logic"),
-            ]
-            st.info(c.judge.overall_comment)
-            for key, label in dims:
-                d = getattr(c.judge, key)
-                st.markdown(f"**{label}: {d.score} / 5**")
-                st.caption(d.reasoning)
-
-    # Collapsed Technical & Export Details (out of the way by default)
-    with st.expander("🔧 Technical Details (Prompts, Raw JSON & Run History)", expanded=False):
-        st.caption(
-            f"Run `{run.run_id}` • Agent `{run.agent_model}` • Judge `{run.judge_model or 'off'}` • "
-            f"Latency `{c.metrics.latency_ms} ms` • Tokens `{c.metrics.input_tokens}/{c.metrics.output_tokens}`"
-        )
-        t_p, t_j, t_h = st.tabs(["📜 Prompts Sent", "🧾 Raw JSON Output", "📈 Run History & Download"])
-        with t_p:
-            st.code(c.system_prompt, language="text", wrap_lines=True)
-            st.code(c.user_prompt, language="text", wrap_lines=True)
-        with t_j:
-            st.json(out, expanded=False)
-        with t_h:
-            hist = []
-            for rid in reversed(run_ids[:20]):
-                try:
-                    r = _load(rid)
-                    hist.append({
-                        "Date": r.started_at_utc[:16].replace("T", " "),
-                        "Mode": "Live AI" if r.mode == "live_agent" else "Offline",
-                        "Model": r.agent_model,
-                        "Passed": f"{r.summary.passed}/{r.summary.total_cases}",
-                        "Judge Avg": r.summary.judge_avg,
-                        "Cost $": r.summary.total_cost_usd,
-                    })
-                except Exception:
-                    continue
-            if hist:
-                st.dataframe(list(reversed(hist)), hide_index=True, width="stretch")
-            st.download_button(
-                "⬇️ Download Run Report (JSON)",
-                data=run.model_dump_json(indent=2),
-                file_name=f"eval_run_{run.run_id}.json",
-                mime="application/json",
-                key="eval_dl",
+        chk_col, jdg_col = st.columns([1.15, 1.0])
+        with chk_col:
+            st.markdown("##### ✅ Automated Checks")
+            st.dataframe(
+                [
+                    {
+                        "Status": _eval_status_icon(ch.status),
+                        "Check": ch.name,
+                        "Details": ch.actual if ch.status == "pass" else f"Expected {ch.expected}; got {ch.actual}",
+                    }
+                    for ch in sorted(c.checks, key=lambda x: (x.status == "pass", x.name))
+                    if ch.grader == "code"
+                ],
+                hide_index=True,
+                width="stretch",
             )
+
+        with jdg_col:
+            st.markdown("##### ⚖️ AI Judge Feedback")
+            if c.judge is None:
+                st.info("AI Judge was not run for this evaluation.")
+            else:
+                dims = [
+                    ("faithfulness", "Accuracy (No Hallucinations)"),
+                    ("completeness", "Completeness"),
+                    ("ac_testability", "Testable Criteria"),
+                    ("story_quality", "Story Clarity"),
+                    ("backlog_reasoning", "Backlog & Priority Logic"),
+                ]
+                st.info(c.judge.overall_comment)
+                for key, label in dims:
+                    d = getattr(c.judge, key)
+                    st.markdown(f"**{label}: {d.score} / 5**")
+                    st.caption(d.reasoning)
+
+        with st.expander("🔧 Technical Details (Prompts & Raw JSON)", expanded=False):
+            st.caption(
+                f"Run `{run.run_id}` • Agent `{run.agent_model}` • Judge `{run.judge_model or 'off'}` • "
+                f"Latency `{c.metrics.latency_ms} ms` • Tokens `{c.metrics.input_tokens}/{c.metrics.output_tokens}`"
+            )
+            st.markdown("**System Prompt**")
+            st.code(c.system_prompt, language="text", wrap_lines=True)
+            st.markdown("**User Prompt**")
+            st.code(c.user_prompt, language="text", wrap_lines=True)
+            st.markdown("**Raw JSON Output**")
+            st.json(out, expanded=False)
+
+    curr_sel = tuple(getattr(getattr(table_event, "selection", None), "rows", []) or [])
+    prev_sel = st.session_state.get("_eval_prev_sel", ())
+    st.session_state["_eval_prev_sel"] = curr_sel
+    if curr_sel and curr_sel != prev_sel:
+        row_idx = curr_sel[0]
+        if 0 <= row_idx < len(shown_cases):
+            _show_case_popup(shown_cases[row_idx])
+
+    # Run History & Export (collapsed at the bottom)
+    with st.expander("📈 Run History & Download Report", expanded=False):
+        hist = []
+        for rid in reversed(run_ids[:20]):
+            try:
+                r = _load(rid)
+                hist.append({
+                    "Date": r.started_at_utc[:16].replace("T", " "),
+                    "Mode": "Live AI" if r.mode == "live_agent" else "Offline",
+                    "Model": r.agent_model,
+                    "Passed": f"{r.summary.passed}/{r.summary.total_cases}",
+                    "Judge Avg": r.summary.judge_avg,
+                    "Cost $": r.summary.total_cost_usd,
+                })
+            except Exception:
+                continue
+        if hist:
+            st.dataframe(list(reversed(hist)), hide_index=True, width="stretch")
+        st.download_button(
+            "⬇️ Download Run Report (JSON)",
+            data=run.model_dump_json(indent=2),
+            file_name=f"eval_run_{run.run_id}.json",
+            mime="application/json",
+            key="eval_dl",
+        )
 
 
 def build_unified_events(
