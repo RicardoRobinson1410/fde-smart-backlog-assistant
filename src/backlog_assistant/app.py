@@ -4601,69 +4601,141 @@ document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeLog();
     components.html(logs_html, height=560, scrolling=True)
 
 
+def _discover_projects() -> dict[str, str]:
+    """Return {display_label: config_path} for built-in and user-created projects."""
+    projects: dict[str, str] = {}
+    built_ins = [
+        ("config/scenario_config.json", "🏦 FinTech Backlog (Default)"),
+        ("config/presets/incident_triage_scenario.json", "🚨 SRE Outage Triage"),
+    ]
+    for path_str, fallback_lbl in built_ins:
+        p = Path(path_str)
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                lbl = f"{data.get('project_title', fallback_lbl)} ({data.get('id_prefix', 'STORY')})"
+            except Exception:
+                lbl = fallback_lbl
+            projects[lbl] = path_str
+
+    proj_dir = Path("config/projects")
+    if proj_dir.exists():
+        for p in sorted(proj_dir.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                lbl = f"📁 {data.get('project_title', p.stem)} ({data.get('id_prefix', 'TASK')})"
+            except Exception:
+                lbl = f"📁 {p.stem}"
+            projects[lbl] = str(p).replace("\\", "/")
+    return projects
+
+
 def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
-    """Tab 7: Clean Configuration, Live OpenAI API Toggle & Custom Document Upload Tab."""
-    st.markdown("### ⚙️ Pipeline Settings & Custom Document Upload")
-    presets = {
-        "🏦 FinTech Backlog (STORY-001)": "config/scenario_config.json",
-        "🚨 SRE Outage Triage (REM-001)": "config/presets/incident_triage_scenario.json",
-    }
-    c1, c2, c3 = st.columns([2.4, 2.4, 1.8])
-    with c1:
-        choice = st.selectbox("✨ Scenario Persona Preset:", list(presets.keys()))
-    base_cfg = load_scenario_config(presets[choice])
+    """Tab 8: Project Switcher, Create New Project, and Clean Essential Settings."""
+    st.markdown("### ⚙️ Project & Settings")
+    st.caption("Switch between projects, create a new project with its own backlog, or adjust essential AI & privacy settings.")
 
-    with c2:
-        mode_choice = st.selectbox(
-            "🤖 AI Execution Mode:",
-            ["⚡ Instant Simulation (Free / Offline)", "🌐 Live OpenAI API (.env Key)"],
-        )
-    offline = mode_choice.startswith("⚡")
+    projects = _discover_projects()
+    labels = list(projects.keys())
+    paths = list(projects.values())
 
-    with c3:
-        st.write("")
-        pii_guard = st.toggle("🛡️ Pre-LLM PII Shield", value=True)
+    active_path = st.session_state.get("active_project_path", paths[0] if paths else "config/scenario_config.json")
+    default_idx = paths.index(active_path) if active_path in paths else 0
 
-    o1, o2, o3, o4, o5 = st.columns(5)
-    domain_name = o1.text_input("Industry Domain", value=base_cfg.domain_name)
-    item_label = o2.text_input("Work Item Label", value=base_cfg.output_item_label)
-    id_prefix = o3.text_input("Ticket Prefix", value=base_cfg.id_prefix)
-    m_ext = o4.text_input("Extractor Model (Fast)", value=base_cfg.subagent_models.extractor_agent)
-    m_sec = o5.text_input("Security Model (Reasoning)", value=base_cfg.subagent_models.security_reviewer)
+    col_switch, col_create = st.columns([1.2, 1.0])
+    with col_switch:
+        with st.container(border=True):
+            st.markdown("#### 📂 Active Project")
+            sel_label = st.selectbox(
+                "Switch Project",
+                labels,
+                index=default_idx,
+                key="active_project_selector",
+            )
+            sel_path = projects[sel_label]
+            if sel_path != st.session_state.get("active_project_path"):
+                st.session_state["active_project_path"] = sel_path
+                st.rerun()
 
-    cfg = base_cfg.with_overrides({
-        "domain_name": domain_name,
-        "output_item_label": item_label,
-        "id_prefix": id_prefix,
-        "enable_pii_redaction": pii_guard,
-        "subagent_models.extractor_agent": m_ext,
-        "subagent_models.security_reviewer": m_sec,
-    })
+            base_cfg = load_scenario_config(sel_path)
+            st.caption(
+                f"**Domain:** {base_cfg.domain_name}  \n"
+                f"**Ticket Prefix:** `{base_cfg.id_prefix}-001` • **Backlog:** `{base_cfg.paths.baseline_backlog}`"
+            )
 
-    st.markdown("---")
-    st.markdown("#### 📤 Upload Custom Document or Switch Active Scenario for All Tabs")
-    u1, u2 = st.columns([2, 2])
-    samples_dir = Path(cfg.paths.samples_dir)
-    available = sorted(p.name for p in samples_dir.glob("*") if p.suffix.lower() in {".txt", ".md", ".pdf"})
-    with u1:
-        selected_file = st.selectbox("Select Active Sample Document:", options=available)
-    with u2:
-        uploaded = st.file_uploader("Or Upload Custom File (.txt, .md, .pdf):", type=["txt", "md", "pdf"])
+            has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
+            offline = not has_key
+            if has_key:
+                st.success("🌐 Live OpenAI API connected (`.env` key active)")
+            else:
+                st.warning("⚡ Offline mode (no `OPENAI_API_KEY` found in `.env`)")
 
-    target_doc = samples_dir / selected_file
-    if uploaded is not None:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
-            tmp.write(uploaded.getvalue())
-            target_doc = Path(tmp.name)
+            st.markdown("##### Essential Settings")
+            s1, s2 = st.columns(2)
+            new_title = s1.text_input("Project Name", value=base_cfg.project_title, key=f"set_title_{sel_path}")
+            new_domain = s2.text_input("Domain", value=base_cfg.domain_name, key=f"set_dom_{sel_path}")
+            s3, s4, s5 = st.columns(3)
+            new_prefix = s3.text_input("Ticket Prefix", value=base_cfg.id_prefix, key=f"set_pre_{sel_path}")
+            model_opts = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
+            cur_model = base_cfg.subagent_models.extractor_agent
+            if cur_model not in model_opts:
+                model_opts.insert(0, cur_model)
+            new_model = s4.selectbox("AI Model", model_opts, index=model_opts.index(cur_model), key=f"set_mod_{sel_path}")
+            pii_guard = s5.toggle("🛡️ Privacy PII Shield", value=base_cfg.enable_pii_redaction, key=f"set_pii_{sel_path}")
 
-    if st.button("🚀 Run Pipeline with Current Settings", type="primary"):
-        st.session_state["active_doc_path"] = str(target_doc)
-        engine = BacklogEngine(config=cfg, force_offline=offline)
-        st.session_state["latest_result"] = engine.analyze(
-            target_doc,
-            backlog_path=cfg.paths.baseline_backlog,
-        )
-        st.success(f"Executed pipeline on `{target_doc.name}`!")
+            cfg = base_cfg.with_overrides({
+                "project_title": new_title.strip() or base_cfg.project_title,
+                "domain_name": new_domain.strip() or base_cfg.domain_name,
+                "id_prefix": new_prefix.strip().upper() or base_cfg.id_prefix,
+                "llm_model": new_model,
+                "subagent_models.extractor_agent": new_model,
+                "subagent_models.backlog_auditor": new_model,
+                "enable_pii_redaction": pii_guard,
+            })
+
+            if st.button("💾 Save Project Settings", key=f"save_proj_{sel_path}"):
+                Path(sel_path).write_text(cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                st.success(f"Saved settings to `{sel_path}`!")
+
+    with col_create:
+        with st.container(border=True):
+            st.markdown("#### ➕ Create New Project")
+            with st.form("create_project_form", clear_on_submit=True):
+                p_name = st.text_input("Project Name", placeholder="e.g. E-Commerce Checkout")
+                p_domain = st.text_input("Industry / Domain", placeholder="e.g. Retail Payments & Checkout")
+                c_a, c_b = st.columns(2)
+                p_prefix = c_a.text_input("Ticket Prefix", value="PROJ", max_chars=8)
+                p_label = c_b.selectbox("Work Item Type", ["User Story", "Engineering Task", "Incident Ticket"])
+                p_model = st.selectbox("Default AI Model", ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"])
+                submitted = st.form_submit_button("➕ Create & Switch to Project", type="primary")
+                if submitted:
+                    if not p_name.strip():
+                        st.error("Please enter a **Project Name**.")
+                    else:
+                        slug = re.sub(r"[^a-z0-9]+", "_", p_name.strip().lower()).strip("_") or "project"
+                        cfg_path = Path("config/projects") / f"{slug}.json"
+                        backlog_path = Path("data/projects") / f"{slug}_backlog.json"
+                        if cfg_path.exists():
+                            st.error(f"Project `{slug}` already exists.")
+                        else:
+                            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                            backlog_path.parent.mkdir(parents=True, exist_ok=True)
+                            backlog_path.write_text("[]\n", encoding="utf-8")
+                            new_cfg = load_scenario_config("config/scenario_config.json").with_overrides({
+                                "scenario_id": slug,
+                                "project_title": p_name.strip(),
+                                "domain_name": p_domain.strip() or p_name.strip(),
+                                "output_item_label": p_label,
+                                "id_prefix": p_prefix.strip().upper() or "PROJ",
+                                "llm_model": p_model,
+                                "subagent_models.extractor_agent": p_model,
+                                "subagent_models.backlog_auditor": p_model,
+                                "paths.baseline_backlog": str(backlog_path).replace("\\", "/"),
+                            })
+                            cfg_path.write_text(new_cfg.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                            st.session_state["active_project_path"] = str(cfg_path).replace("\\", "/")
+                            st.success(f"✅ Created project **{p_name.strip()}**!")
+                            st.rerun()
 
     return cfg, offline
 
@@ -4683,7 +4755,7 @@ def render_portal() -> None:
         "💰 5. FinOps & Cost Savings",
         "🧪 6. Agent Evaluation Lab",
         "🚨 7. Error & Log Explorer",
-        "⚙️ 8. Settings & Upload",
+        "⚙️ 8. Project & Settings",
     ])
 
     with tab_settings:
