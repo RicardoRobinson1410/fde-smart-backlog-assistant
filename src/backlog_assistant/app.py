@@ -1571,6 +1571,24 @@ def render_chatgpt_conversational_first_tab(
 
         function buildClientAnalyticalFallback(query, activeDoc) {{
           const q = query.toLowerCase();
+          const isComplexityQuery = ['hard', 'difficult', 'complex', 'point', 'fibonacci', 'effort', 'biggest'].some(w => q.includes(w));
+          if (!isComplexityQuery) {{
+            return {{
+              type: 'conversation',
+              steps: [
+                {{
+                  title: `⚠️ Backend Chat API Unreachable (${{API_BASE}})`,
+                  detail: `Could not reach ${{API_BASE}}/api/chat. The Streamlit server may have restarted.`
+                }}
+              ],
+              replyHtml: `
+                <div class="story-card" style="border-color:#f59e0b; color:#fde68a;">
+                  <strong>⚠️ Connection Lost to Backend Agent API</strong>
+                  <div style="margin-top:6px; color:#e5e5e5;">Please <strong>refresh this browser tab (F5 / Ctrl+R)</strong> to reconnect to the restarted Streamlit + FDE Agent server.</div>
+                </div>
+              `
+            }};
+          }}
           const allStories = [];
           if (activeDoc && activeDoc.stories) {{
             activeDoc.stories.forEach(s => allStories.push(Object.assign({{ source_doc: activeDoc.filename }}, s)));
