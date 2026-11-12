@@ -235,6 +235,14 @@ def test_fde_guardrails_pii_redaction_finops_hitl_and_audit_log(tmp_path: Path) 
     assert logged["document_sha256"] == res_pci.metadata.document_sha256
     assert logged["hitl_approval_required_count"] == 1
 
+    # Verify the Centralized FDE Portal audit history loader reads the JSONL records
+    from backlog_assistant.app import load_audit_history
+
+    portal_records = load_audit_history(audit_file)
+    assert len(portal_records) == 1
+    assert portal_records[0]["document_sha256"] == res_pci.metadata.document_sha256
+
+
 
 
 
