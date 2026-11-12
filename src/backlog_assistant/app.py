@@ -757,6 +757,8 @@ def _answer_with_live_openai_or_analytical_engine(
             if t_tok > 0:
                 _append_task_audit_event(cfg, {
                     "event_type": "live_chat_turn",
+                    "execution_mode": "live_openai",
+                    "model_name": "gpt-4o-mini",
                     "source_file": f"Chat: {q[:38]}",
                     "estimated_tokens": t_tok,
                     "estimated_cost_usd": live_cost,
@@ -905,23 +907,24 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
             if self.path == "/api/finops":
                 cur_cfg = _CHAT_SERVER_STATE["cfg"]
                 audit_rows = load_audit_history(cur_cfg.paths.audit_log_path)
-                total_tokens = sum(int(r.get("estimated_tokens", 0) or 0) for r in audit_rows)
-                actual_cost = sum(float(r.get("estimated_cost_usd", 0.0) or 0.0) for r in audit_rows)
-                live_tokens = sum(
-                    int(r.get("estimated_tokens", 0) or 0)
-                    for r in audit_rows
+                live_rows = [
+                    r for r in audit_rows
                     if float(r.get("estimated_cost_usd", 0.0) or 0.0) > 0
-                )
+                    or str(r.get("execution_mode", "")).startswith("live")
+                    or str(r.get("event_type", "")) == "live_chat_turn"
+                ]
+                live_tokens = sum(int(r.get("estimated_tokens", 0) or 0) for r in live_rows)
+                actual_cost = sum(float(r.get("estimated_cost_usd", 0.0) or 0.0) for r in live_rows)
                 naive_live_cost = (live_tokens * 3.85) / 1_000_000.0 if live_tokens > 0 else 0.0
                 saved_usd = max(0.0, naive_live_cost - actual_cost)
                 recent = []
-                for r in reversed(audit_rows[-10:]):
+                for r in reversed(live_rows[-10:]):
                     r_tok = int(r.get("estimated_tokens", 0) or 0)
                     r_cost = float(r.get("estimated_cost_usd", 0.0) or 0.0)
                     ts_raw = str(r.get("timestamp_utc") or r.get("timestamp") or "")
-                    lbl_raw = str(r.get("source_file") or r.get("document_name") or r.get("event_type") or "pipeline_event")
+                    lbl_raw = str(r.get("source_file") or r.get("document_name") or r.get("event_type") or "live_event")
                     tkt_raw = str(r.get("ticket_id") or f"{int(r.get('stories_generated', r.get('story_count', 0)) or 0)} stories")
-                    mode_raw = str(r.get("execution_mode") or ("live_openai" if r_cost > 0 else "local_audit"))
+                    mode_raw = str(r.get("execution_mode") or "live_openai")
                     recent.append({
                         "timestamp": ts_raw[:19].replace("T", " ") or "-",
                         "label": lbl_raw,
@@ -931,8 +934,8 @@ def ensure_chat_api_server(cfg: ScenarioConfig, bundle: dict[str, dict[str, Any]
                         "cost": round(r_cost, 6),
                     })
                 self._send_json(200, {
-                    "total_events": len(audit_rows),
-                    "total_tokens": total_tokens,
+                    "total_events": len(live_rows),
+                    "total_tokens": live_tokens,
                     "live_tokens": live_tokens,
                     "total_cost_usd": round(actual_cost, 6),
                     "naive_cost_usd": round(naive_live_cost, 6),
@@ -3429,7 +3432,8 @@ def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
     )
 
     samples_dir = Path(cfg.paths.samples_dir)
-    eval_engine = BacklogEngine(config=cfg, force_offline=True)
+    eval_cfg = cfg.with_overrides({"paths.audit_log_path": "outputs/rubric_eval_cache.jsonl"})
+    eval_engine = BacklogEngine(config=eval_cfg, force_offline=True)
     r1 = eval_engine.analyze(samples_dir / "01_sprint_planning_notes.txt")
     r2 = eval_engine.analyze(samples_dir / "02_incident_postmortem.md")
     r3 = eval_engine.analyze(samples_dir / "03_pci_compliance_spec.pdf")
@@ -3576,7 +3580,8 @@ def build_unified_events(
         events.append(item)
 
     samples_dir = Path(cfg.paths.samples_dir)
-    eval_engine = BacklogEngine(config=cfg, force_offline=True)
+    eval_cfg = cfg.with_overrides({"paths.audit_log_path": "outputs/rubric_eval_cache.jsonl"})
+    eval_engine = BacklogEngine(config=eval_cfg, force_offline=True)
     all_results = [
         ("Active Run", latest),
         ("01_sprint_planning_notes.txt", eval_engine.analyze(samples_dir / "01_sprint_planning_notes.txt")),
