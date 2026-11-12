@@ -3554,161 +3554,385 @@ def render_evaluation_lab(cfg: ScenarioConfig) -> None:
         st.success("All test cases passed! 🎉")
         return
 
-    overview_rows = []
+    cases_payload = []
     for c in shown_cases:
-        failed_names = [ch.name for ch in c.checks if ch.status == "fail"]
-        if c.judge:
-            j_avg = sum(
-                getattr(c.judge, d).score
-                for d in ("faithfulness", "completeness", "ac_testability", "story_quality", "backlog_reasoning")
-            ) / 5.0
-            j_str = f"{j_avg:.1f} / 5"
-        else:
-            j_str = "—"
-        overview_rows.append({
-            "Result": "✅ Passed" if c.status == "PASS" else "❌ Failed",
-            "Test Case": f"{c.case.id} · {c.case.name}",
-            "Category": c.case.category,
-            "AI Rating": j_str,
-            "Summary": "All checks passed" if not failed_names else "; ".join(failed_names[:2]) + ("…" if len(failed_names) > 2 else ""),
-            "Time": f"{c.metrics.latency_ms / 1000:.1f}s",
-            "Cost": f"${c.metrics.cost_usd + c.metrics.judge_cost_usd:.4f}",
-        })
-
-    table_event = st.dataframe(
-        overview_rows,
-        hide_index=True,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"eval_table_{run.run_id}_{only_failed}",
-    )
-
-    @st.dialog("Test Case Details", width="large")
-    def _show_case_popup(c: Any) -> None:
         failed_checks = [ch for ch in c.checks if ch.status == "fail"]
+        failed_names = [ch.name for ch in failed_checks]
         out = c.output or {}
         summ = out.get("summary", {})
         stories = out.get("stories", [])
-
-        st_color = "#10a37f" if c.status == "PASS" else "#ef4444"
-        st.markdown(
-            f'<div style="border-left:4px solid {st_color};background:#161616;padding:12px 16px;border-radius:8px;margin-bottom:12px;">'
-            f'<div style="font-size:1.05rem;font-weight:700;color:#fff;">{"✅ PASSED" if c.status == "PASS" else "❌ FAILED"} — {_html.escape(c.case.id)}: {_html.escape(c.case.name)}</div>'
-            f'<div style="font-size:0.86rem;color:#cbd5e1;margin-top:4px;"><strong>Why we test this:</strong> {_html.escape(c.case.why_it_matters)}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        if c.error:
-            st.error(f"Agent error: {c.error}")
-        for ch in failed_checks:
-            ev_txt = f" — {', '.join(ch.evidence[:3])}" if ch.evidence else ""
-            st.error(f"**Failed check: {ch.name}**  \nExpected: {ch.expected}  \nGot: {ch.actual}{ev_txt}")
-
-        col_in, col_exp, col_act = st.columns(3)
-        with col_in:
-            with st.container(border=True):
-                st.markdown("##### 📄 1. Input Given")
-                if c.metrics.pii_redacted_count > 0:
-                    st.success(f"🔒 {c.metrics.pii_redacted_count} sensitive item(s) masked before sending to AI")
-                    st.text_area("Sanitized text sent to AI", value=c.sanitized_input, height=210, disabled=True, key=f"pop_in_{c.case.id}")
-                else:
-                    st.text_area("Document text", value=c.case.document, height=240, disabled=True, key=f"pop_in_{c.case.id}")
-
-        with col_exp:
-            with st.container(border=True):
-                st.markdown("##### 🎯 2. What Should Happen")
-                st.markdown(c.case.reference_notes)
-                exp = c.case.expectations
-                bullets = []
-                if "story_count" in exp:
-                    bullets.append(f"**Stories:** {exp['story_count'][0]}–{exp['story_count'][1]}")
-                if exp.get("required_topics"):
-                    bullets.append("**Must cover:** " + ", ".join(t["label"] for t in exp["required_topics"]))
-                if exp.get("backlog_links"):
-                    bullets.append("**Must link to:** " + ", ".join(f"{l['backlog_id']} ({'/'.join(l['alignment'])})" for l in exp["backlog_links"]))
-                if exp.get("hitl_required"):
-                    bullets.append("**Human approval:** Required")
-                if exp.get("min_open_questions"):
-                    bullets.append(f"**Open questions:** At least {exp['min_open_questions']}")
-                if bullets:
-                    st.markdown("\n".join(f"- {b}" for b in bullets))
-
-        with col_act:
-            with st.container(border=True):
-                st.markdown("##### 🤖 3. What Agent Produced")
-                st.caption(f"{len(stories)} stories • {len(summ.get('open_questions', []))} open questions")
-                if stories:
-                    for s_ in stories:
-                        refs = f" (links to `{', '.join(s_.get('related_backlog_ids', []))}`)" if s_.get("related_backlog_ids") else ""
-                        hitl = " 🚨" if s_.get("requires_human_approval") else ""
-                        st.markdown(f"**{s_['id']}** `{s_['priority']}` `{s_['backlog_alignment']}`{refs}{hitl}  \n{s_['title']}")
-                        with st.expander("View story & acceptance criteria", expanded=False):
-                            st.markdown(f"_{s_['user_story']}_")
-                            for ac in s_.get("acceptance_criteria", []):
-                                st.markdown(f"- {ac}")
-                else:
-                    st.info("No stories generated.")
-                if summ.get("open_questions"):
-                    st.markdown("**Open questions asked:**")
-                    for q in summ["open_questions"]:
-                        st.markdown(f"- ❓ {q}")
-
-        chk_col, jdg_col = st.columns([1.15, 1.0])
-        with chk_col:
-            st.markdown("##### ✅ Automated Checks")
-            st.dataframe(
-                [
-                    {
-                        "Status": _eval_status_icon(ch.status),
-                        "Check": ch.name,
-                        "Details": ch.actual if ch.status == "pass" else f"Expected {ch.expected}; got {ch.actual}",
-                    }
-                    for ch in sorted(c.checks, key=lambda x: (x.status == "pass", x.name))
-                    if ch.grader == "code"
-                ],
-                hide_index=True,
-                width="stretch",
-            )
-
-        with jdg_col:
-            st.markdown("##### ⚖️ AI Judge Feedback")
-            if c.judge is None:
-                st.info("AI Judge was not run for this evaluation.")
-            else:
-                dims = [
+        if c.judge:
+            dims_data = [
+                {"label": lbl, "score": getattr(c.judge, key).score, "reasoning": getattr(c.judge, key).reasoning}
+                for key, lbl in [
                     ("faithfulness", "Accuracy (No Hallucinations)"),
                     ("completeness", "Completeness"),
                     ("ac_testability", "Testable Criteria"),
                     ("story_quality", "Story Clarity"),
                     ("backlog_reasoning", "Backlog & Priority Logic"),
                 ]
-                st.info(c.judge.overall_comment)
-                for key, label in dims:
-                    d = getattr(c.judge, key)
-                    st.markdown(f"**{label}: {d.score} / 5**")
-                    st.caption(d.reasoning)
+            ]
+            j_avg = sum(d["score"] for d in dims_data) / 5.0
+            j_str = f"{j_avg:.1f} / 5"
+            judge_obj = {"overall": c.judge.overall_comment, "dims": dims_data}
+        else:
+            j_str = "—"
+            judge_obj = None
 
-        with st.expander("🔧 Technical Details (Prompts & Raw JSON)", expanded=False):
-            st.caption(
-                f"Run `{run.run_id}` • Agent `{run.agent_model}` • Judge `{run.judge_model or 'off'}` • "
-                f"Latency `{c.metrics.latency_ms} ms` • Tokens `{c.metrics.input_tokens}/{c.metrics.output_tokens}`"
-            )
-            st.markdown("**System Prompt**")
-            st.code(c.system_prompt, language="text", wrap_lines=True)
-            st.markdown("**User Prompt**")
-            st.code(c.user_prompt, language="text", wrap_lines=True)
-            st.markdown("**Raw JSON Output**")
-            st.json(out, expanded=False)
+        exp = c.case.expectations
+        exp_bullets = []
+        if "story_count" in exp:
+            exp_bullets.append(f"Stories: {exp['story_count'][0]}–{exp['story_count'][1]}")
+        if exp.get("required_topics"):
+            exp_bullets.append("Must cover: " + ", ".join(t["label"] for t in exp["required_topics"]))
+        if exp.get("backlog_links"):
+            exp_bullets.append("Must link to: " + ", ".join(f"{l['backlog_id']} ({'/'.join(l['alignment'])})" for l in exp["backlog_links"]))
+        if exp.get("hitl_required"):
+            exp_bullets.append("Human approval: Required")
+        if exp.get("min_open_questions"):
+            exp_bullets.append(f"Open questions: At least {exp['min_open_questions']}")
 
-    curr_sel = tuple(getattr(getattr(table_event, "selection", None), "rows", []) or [])
-    prev_sel = st.session_state.get("_eval_prev_sel", ())
-    st.session_state["_eval_prev_sel"] = curr_sel
-    if curr_sel and curr_sel != prev_sel:
-        row_idx = curr_sel[0]
-        if 0 <= row_idx < len(shown_cases):
-            _show_case_popup(shown_cases[row_idx])
+        cases_payload.append({
+            "id": c.case.id,
+            "name": c.case.name,
+            "category": c.case.category,
+            "why": c.case.why_it_matters,
+            "status": c.status,
+            "rating": j_str,
+            "summary_text": "All checks passed" if not failed_names else "; ".join(failed_names[:2]) + ("…" if len(failed_names) > 2 else ""),
+            "time_s": f"{c.metrics.latency_ms / 1000:.1f}s",
+            "cost": f"${c.metrics.cost_usd + c.metrics.judge_cost_usd:.4f}",
+            "pii_redacted": c.metrics.pii_redacted_count,
+            "input_text": c.sanitized_input if c.metrics.pii_redacted_count > 0 else c.case.document,
+            "reference_notes": c.case.reference_notes,
+            "exp_bullets": exp_bullets,
+            "stories": stories,
+            "open_questions": summ.get("open_questions", []),
+            "error": c.error or "",
+            "failed_checks": [
+                {
+                    "name": ch.name,
+                    "expected": ch.expected,
+                    "actual": ch.actual,
+                    "evidence": ", ".join(ch.evidence[:3]) if ch.evidence else "",
+                }
+                for ch in failed_checks
+            ],
+            "code_checks": [
+                {
+                    "status": ch.status,
+                    "name": ch.name,
+                    "details": ch.actual if ch.status == "pass" else f"Expected {ch.expected}; got {ch.actual}",
+                }
+                for ch in sorted(c.checks, key=lambda x: (x.status == "pass", x.name))
+                if ch.grader == "code"
+            ],
+            "judge": judge_obj,
+            "tech": {
+                "meta": f"Run {run.run_id} • Agent {run.agent_model} • Judge {run.judge_model or 'off'} • {c.metrics.latency_ms} ms • {c.metrics.input_tokens}/{c.metrics.output_tokens} tokens",
+                "system_prompt": c.system_prompt,
+                "user_prompt": c.user_prompt,
+                "raw_json": json.dumps(out, indent=2, ensure_ascii=False),
+            },
+        })
+
+    payload_json = json.dumps(cases_payload, ensure_ascii=False).replace("</", "<\\/")
+    interactive_eval_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: transparent; color: #e2e8f0;
+  }}
+  .tbl-wrap {{
+    border: 1px solid #2b2b2b; border-radius: 12px; overflow: hidden; background: #121212;
+  }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  thead th {{
+    text-align: left; padding: 11px 14px; background: #18181b; color: #94a3b8;
+    font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+    border-bottom: 1px solid #2b2b2b;
+  }}
+  tbody tr {{
+    border-bottom: 1px solid #222; cursor: pointer; transition: background 0.14s ease;
+  }}
+  tbody tr:last-child {{ border-bottom: none; }}
+  tbody tr:hover {{ background: #1e293b; }}
+  tbody td {{ padding: 11px 14px; vertical-align: middle; }}
+  .badge {{
+    display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
+    border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+  }}
+  .badge-pass {{ background: rgba(16, 163, 127, 0.18); color: #34d399; border: 1px solid rgba(16, 163, 127, 0.35); }}
+  .badge-fail {{ background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); }}
+  .cat-pill {{
+    background: #27272a; color: #cbd5e1; padding: 2px 8px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+  }}
+  .row-hint {{ color: #60a5fa; font-size: 12px; font-weight: 600; white-space: nowrap; }}
+
+  /* Modal Overlay */
+  .modal-backdrop {{
+    display: none; position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0, 0, 0, 0.78); backdrop-filter: blur(4px);
+    padding: 16px; overflow-y: auto; align-items: flex-start; justify-content: center;
+  }}
+  .modal-backdrop.open {{ display: flex; }}
+  .modal-card {{
+    width: 100%; max-width: 1080px; background: #141414; border: 1px solid #2e2e32;
+    border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.65); overflow: hidden; margin: auto 0;
+    animation: popIn 0.15s ease-out;
+  }}
+  @keyframes popIn {{
+    from {{ opacity: 0; transform: translateY(8px) scale(0.99); }}
+    to {{ opacity: 1; transform: translateY(0) scale(1); }}
+  }}
+  .modal-hdr {{
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 14px 18px; background: #1a1a1d; border-bottom: 1px solid #2b2b2b;
+  }}
+  .modal-title {{ font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 10px; }}
+  .modal-actions {{ display: flex; align-items: center; gap: 8px; }}
+  .btn {{
+    background: #27272a; color: #e2e8f0; border: 1px solid #3f3f46; border-radius: 8px;
+    padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }}
+  .btn:hover {{ background: #3f3f46; }}
+  .btn:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+  .btn-close {{ background: #991b1b; border-color: #ef4444; color: #fff; }}
+  .btn-close:hover {{ background: #b91c1c; }}
+  .modal-body {{ padding: 16px 18px; max-height: 78vh; overflow-y: auto; }}
+  .why-box {{
+    border-left: 4px solid #3b82f6; background: #18181b; padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; color: #cbd5e1; margin-bottom: 12px;
+  }}
+  .fail-box {{
+    background: rgba(127, 29, 29, 0.35); border: 1px solid #ef4444; color: #fecaca;
+    padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 10px;
+  }}
+  .grid-3 {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 14px;
+  }}
+  .grid-2 {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 14px;
+  }}
+  .panel {{
+    background: #18181b; border: 1px solid #2b2b2b; border-radius: 10px; padding: 12px 14px;
+  }}
+  .panel h4 {{ margin: 0 0 8px 0; font-size: 13px; color: #f8fafc; }}
+  .pre-box {{
+    background: #0f0f12; border: 1px solid #26262a; border-radius: 8px; padding: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #cbd5e1;
+    white-space: pre-wrap; max-height: 220px; overflow-y: auto; line-height: 1.45;
+  }}
+  .pii-ok {{
+    background: rgba(16, 163, 127, 0.16); border: 1px solid rgba(16, 163, 127, 0.4); color: #6ee7b7;
+    padding: 6px 10px; border-radius: 6px; font-size: 12px; margin-bottom: 8px;
+  }}
+  .story-item {{
+    background: #121215; border: 1px solid #27272a; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px;
+  }}
+  .bar-bg {{ height: 7px; background: #27272a; border-radius: 999px; overflow: hidden; margin: 4px 0 6px 0; }}
+  .bar-fill {{ height: 100%; background: #10a37f; border-radius: 999px; }}
+  details {{ background: #18181b; border: 1px solid #2b2b2b; border-radius: 8px; padding: 8px 12px; font-size: 12.5px; }}
+  summary {{ cursor: pointer; font-weight: 600; color: #94a3b8; }}
+  ul {{ margin: 6px 0 0 18px; padding: 0; font-size: 12.5px; color: #cbd5e1; }}
+  li {{ margin-bottom: 4px; }}
+</style>
+</head>
+<body>
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Result</th>
+        <th>Test Case</th>
+        <th>Category</th>
+        <th>AI Rating</th>
+        <th>Summary</th>
+        <th>Time</th>
+        <th>Cost</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="evalRows"></tbody>
+  </table>
+</div>
+
+<div id="caseModal" class="modal-backdrop" onclick="if(event.target===this) closeModal()">
+  <div class="modal-card">
+    <div class="modal-hdr">
+      <div class="modal-title" id="mTitle"></div>
+      <div class="modal-actions">
+        <button class="btn" id="btnPrev" onclick="stepModal(-1)">← Prev</button>
+        <button class="btn" id="btnNext" onclick="stepModal(1)">Next →</button>
+        <button class="btn btn-close" onclick="closeModal()">✕ Close</button>
+      </div>
+    </div>
+    <div class="modal-body" id="mBody"></div>
+  </div>
+</div>
+
+<script>
+const CASES = {payload_json};
+let activeIdx = -1;
+
+function esc(s) {{
+  return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}}
+
+function renderTable() {{
+  const tbody = document.getElementById("evalRows");
+  tbody.innerHTML = CASES.map((c, idx) => {{
+    const badge = c.status === "PASS"
+      ? '<span class="badge badge-pass">✅ Passed</span>'
+      : '<span class="badge badge-fail">❌ Failed</span>';
+    return `<tr onclick="openModal(${{idx}})">
+      <td>${{badge}}</td>
+      <td><strong>${{esc(c.id)}}</strong> · ${{esc(c.name)}}</td>
+      <td><span class="cat-pill">${{esc(c.category)}}</span></td>
+      <td>${{esc(c.rating)}}</td>
+      <td style="color:${{c.status==='PASS' ? '#94a3b8' : '#fca5a5'}}">${{esc(c.summary_text)}}</td>
+      <td>${{esc(c.time_s)}}</td>
+      <td>${{esc(c.cost)}}</td>
+      <td class="row-hint">Open →</td>
+    </tr>`;
+  }}).join("");
+}}
+
+function openModal(idx) {{
+  activeIdx = idx;
+  const c = CASES[idx];
+  const badge = c.status === "PASS"
+    ? '<span class="badge badge-pass">✅ PASSED</span>'
+    : '<span class="badge badge-fail">❌ FAILED</span>';
+  document.getElementById("mTitle").innerHTML = `${{badge}} <span>${{esc(c.id)}} — ${{esc(c.name)}}</span>`;
+  document.getElementById("btnPrev").disabled = idx <= 0;
+  document.getElementById("btnNext").disabled = idx >= CASES.length - 1;
+
+  let failsHtml = "";
+  if (c.error) failsHtml += `<div class="fail-box"><strong>Agent Error:</strong> ${{esc(c.error)}}</div>`;
+  for (const f of c.failed_checks) {{
+    failsHtml += `<div class="fail-box"><strong>❌ Failed: ${{esc(f.name)}}</strong><br>Expected: ${{esc(f.expected)}}<br>Got: ${{esc(f.actual)}}${{f.evidence ? " — " + esc(f.evidence) : ""}}</div>`;
+  }}
+
+  const piiBanner = c.pii_redacted > 0
+    ? `<div class="pii-ok">🔒 ${{c.pii_redacted}} sensitive item(s) automatically masked before sending to AI</div>`
+    : "";
+
+  const expBullets = c.exp_bullets.length
+    ? `<ul>${{c.exp_bullets.map(b => `<li>${{esc(b)}}</li>`).join("")}}</ul>`
+    : "";
+
+  let storiesHtml = "";
+  if (c.stories.length) {{
+    storiesHtml = c.stories.map(st => {{
+      const refs = (st.related_backlog_ids && st.related_backlog_ids.length) ? ` → <code>${{esc(st.related_backlog_ids.join(", "))}}</code>` : "";
+      const hitl = st.requires_human_approval ? " 🚨" : "";
+      const acs = (st.acceptance_criteria || []).map(a => `<li>${{esc(a)}}</li>`).join("");
+      return `<div class="story-item">
+        <div><strong>${{esc(st.id)}}</strong> · <code>${{esc(st.priority)}}</code> · <code>${{esc(st.backlog_alignment)}}</code>${{refs}}${{hitl}}</div>
+        <div style="margin:4px 0;color:#fff;">${{esc(st.title)}}</div>
+        <details><summary>Story & Acceptance Criteria (${{(st.acceptance_criteria||[]).length}})</summary>
+          <div style="margin-top:6px;color:#94a3b8;font-style:italic;">${{esc(st.user_story)}}</div>
+          <ul>${{acs}}</ul>
+        </details>
+      </div>`;
+    }}).join("");
+  }} else {{
+    storiesHtml = '<div style="color:#94a3b8;font-size:12.5px;">No stories generated.</div>';
+  }}
+
+  const oqHtml = c.open_questions.length
+    ? `<div style="margin-top:8px;font-size:12.5px;"><strong>Open Questions:</strong><ul>${{c.open_questions.map(q => `<li>❓ ${{esc(q)}}</li>`).join("")}}</ul></div>`
+    : "";
+
+  const checksHtml = c.code_checks.map(ch => {{
+    const icon = ch.status === "pass" ? "✅" : "❌";
+    const color = ch.status === "pass" ? "#cbd5e1" : "#fca5a5";
+    return `<tr><td style="padding:5px 8px;">${{icon}}</td><td style="padding:5px 8px;color:${{color}}">${{esc(ch.name)}}</td><td style="padding:5px 8px;color:#94a3b8;">${{esc(ch.details)}}</td></tr>`;
+  }}).join("");
+
+  let judgeHtml = '<div style="color:#94a3b8;font-size:12.5px;">AI Judge was not run for this evaluation.</div>';
+  if (c.judge) {{
+    const dims = c.judge.dims.map(d => {{
+      const pct = Math.round((d.score / 5) * 100);
+      const col = d.score >= 4 ? "#10a37f" : (d.score === 3 ? "#f59e0b" : "#ef4444");
+      return `<div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:12.5px;"><strong>${{esc(d.label)}}</strong><strong>${{d.score}} / 5</strong></div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${{pct}}%;background:${{col}};"></div></div>
+        <div style="font-size:12px;color:#94a3b8;">${{esc(d.reasoning)}}</div>
+      </div>`;
+    }}).join("");
+    judgeHtml = `<div style="background:#121215;border:1px solid #27272a;padding:8px 10px;border-radius:8px;font-size:12.5px;margin-bottom:10px;">${{esc(c.judge.overall)}}</div>${{dims}}`;
+  }}
+
+  document.getElementById("mBody").innerHTML = `
+    <div class="why-box"><strong>Why we test this:</strong> ${{esc(c.why)}}</div>
+    ${{failsHtml}}
+    <div class="grid-3">
+      <div class="panel">
+        <h4>📄 1. Input Given</h4>
+        ${{piiBanner}}
+        <div class="pre-box">${{esc(c.input_text)}}</div>
+      </div>
+      <div class="panel">
+        <h4>🎯 2. What Should Happen</h4>
+        <div style="font-size:12.5px;color:#cbd5e1;line-height:1.5;">${{esc(c.reference_notes)}}</div>
+        ${{expBullets}}
+      </div>
+      <div class="panel">
+        <h4>🤖 3. What Agent Produced</h4>
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:8px;">${{c.stories.length}} stories • ${{c.open_questions.length}} open questions</div>
+        ${{storiesHtml}}
+        ${{oqHtml}}
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="panel">
+        <h4>✅ Automated Checks</h4>
+        <table style="width:100%;font-size:12px;"><tbody>${{checksHtml}}</tbody></table>
+      </div>
+      <div class="panel">
+        <h4>⚖️ AI Judge Feedback</h4>
+        ${{judgeHtml}}
+      </div>
+    </div>
+    <details>
+      <summary>🔧 Technical Details (Prompts & Raw JSON)</summary>
+      <div style="margin:8px 0;color:#94a3b8;font-size:12px;">${{esc(c.tech.meta)}}</div>
+      <div style="font-weight:600;margin:6px 0 4px 0;">System Prompt</div>
+      <div class="pre-box">${{esc(c.tech.system_prompt)}}</div>
+      <div style="font-weight:600;margin:8px 0 4px 0;">User Prompt</div>
+      <div class="pre-box">${{esc(c.tech.user_prompt)}}</div>
+      <div style="font-weight:600;margin:8px 0 4px 0;">Raw JSON Output</div>
+      <div class="pre-box">${{esc(c.tech.raw_json)}}</div>
+    </details>
+  `;
+  document.getElementById("caseModal").classList.add("open");
+}}
+
+function stepModal(delta) {{
+  const next = activeIdx + delta;
+  if (next >= 0 && next < CASES.length) openModal(next);
+}}
+
+function closeModal() {{
+  document.getElementById("caseModal").classList.remove("open");
+}}
+
+document.addEventListener("keydown", (e) => {{
+  if (e.key === "Escape") closeModal();
+}});
+
+renderTable();
+</script>
+</body>
+</html>"""
+
+    components.html(interactive_eval_html, height=680, scrolling=True)
 
     # Run History & Export (collapsed at the bottom)
     with st.expander("📈 Run History & Download Report", expanded=False):
