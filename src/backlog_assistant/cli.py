@@ -45,23 +45,28 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
-    cfg = load_scenario_config(args.config, overrides=_parse_kv(args.set))
-    engine = BacklogEngine(config=cfg, force_offline=args.offline)
-    samples = sorted(p for p in Path(cfg.paths.samples_dir).iterdir() if p.suffix.lower() in {".txt", ".md", ".pdf"})
-    table = Table(title=f"Golden Evaluation Scorecard — {cfg.project_title}", show_lines=True)
-    for col in ["Sample Scenario", "Items", "Min ACs >= 3", "Dedup/Alignment", "Open Questions", "Status"]:
-        table.add_column(col, justify="center")
+    """Run the golden-dataset evaluation harness (code graders + LLM judge) and gate on pass rate."""
+    from backlog_assistant.evaluation import run_evaluation
 
-    all_passed = True
-    for sample in samples:
-        res = engine.analyze(sample)
-        ac_ok = all(len(s.acceptance_criteria) >= cfg.min_acceptance_criteria for s in res.stories)
-        oq_ok = len(res.summary.open_questions) >= 1
-        passed = bool(res.stories) and ac_ok and oq_ok
-        all_passed = all_passed and passed
-        table.add_row(sample.name, str(len(res.stories)), "PASS" if ac_ok else "FAIL", ", ".join(sorted({s.backlog_alignment.value for s in res.stories})), str(len(res.summary.open_questions)), "[bold green]PASS[/bold green]" if passed else "[bold red]FAIL[/bold red]")
+    cfg = load_scenario_config(args.config, overrides=_parse_kv(args.set))
+    run = run_evaluation(
+        cfg, dataset_path=args.dataset, offline=args.offline, judge_enabled=not args.no_judge,
+        judge_model=args.judge_model, case_ids=args.case or None, max_workers=args.workers,
+    )
+    table = Table(title=f"Agent Evaluation — {run.mode} • agent {run.agent_model} • judge {run.judge_model or 'off'}", show_lines=True)
+    for col in ["Case", "Category", "Status", "Score", "Failed checks", "Cost $"]:
+        table.add_column(col)
+    for c in run.cases:
+        failed = ", ".join(ch.name for ch in c.checks if ch.status == "fail") or "-"
+        color = "green" if c.status == "PASS" else "red"
+        table.add_row(f"{c.case.id} {c.case.name}", c.case.category, f"[bold {color}]{c.status}[/bold {color}]",
+                      f"{c.score:.0%}", failed, f"{c.metrics.cost_usd + c.metrics.judge_cost_usd:.4f}")
     console.print(table)
-    return 0 if all_passed else 1
+    s = run.summary
+    console.print(f"Passed {s.passed}/{s.total_cases} ({s.pass_rate:.0%}) • weighted score {s.avg_score:.0%} • "
+                  f"critical failures {s.critical_failures} • judge avg {s.judge_avg} • real cost ${s.total_cost_usd:.4f} • run {run.run_id}")
+    gate_ok = s.pass_rate >= args.min_pass_rate and s.critical_failures == 0 if args.strict else s.pass_rate >= args.min_pass_rate
+    return 0 if gate_ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,10 +81,17 @@ def main(argv: list[str] | None = None) -> int:
     p_an.add_argument("--offline", action="store_true")
     p_an.add_argument("--output-dir", default="outputs")
 
-    p_ev = sub.add_parser("evaluate", help="Run the Golden Evaluation Suite across all sample scenarios")
+    p_ev = sub.add_parser("evaluate", help="Run the golden-dataset agent evaluation (code graders + LLM judge)")
     p_ev.add_argument("--config")
     p_ev.add_argument("--set", action="append")
-    p_ev.add_argument("--offline", action="store_true")
+    p_ev.add_argument("--offline", action="store_true", help="Evaluate the no-LLM heuristic baseline")
+    p_ev.add_argument("--dataset", default="evals/golden_dataset.json")
+    p_ev.add_argument("--case", action="append", help="Only run this case ID (repeatable)")
+    p_ev.add_argument("--no-judge", action="store_true", help="Skip the LLM-as-judge stage")
+    p_ev.add_argument("--judge-model", default="gpt-4o")
+    p_ev.add_argument("--workers", type=int, default=4)
+    p_ev.add_argument("--min-pass-rate", type=float, default=0.0, help="CI gate: exit 1 if pass rate is below this (0-1)")
+    p_ev.add_argument("--strict", action="store_true", help="CI gate: also fail on any critical check failure")
     args = parser.parse_args(argv)
     return cmd_analyze(args) if args.command == "analyze" else cmd_evaluate(args)
 

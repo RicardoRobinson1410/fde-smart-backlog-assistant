@@ -3424,221 +3424,314 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     components.html(live_monitor_html, height=500, scrolling=True)
 
 
-def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
-    """Tab 6: Exhaustive Scenario Certification Rubric Dashboard with live programmatic checks."""
-    st.markdown("### 🏆 Certified-Level RDE Evaluation Rubric Dashboard (All 3 Scenarios)")
+def _eval_status_icon(status: str) -> str:
+    return {"pass": "✅", "fail": "❌", "skip": "⏭️", "error": "⚠️", "PASS": "✅", "FAIL": "❌", "ERROR": "⚠️"}.get(status, "•")
+
+
+def _eval_severity_badge(sev: str) -> str:
+    return {"critical": "🔴 Critical", "major": "🟠 Major", "minor": "🟡 Minor"}.get(sev, sev)
+
+
+def render_evaluation_lab(cfg: ScenarioConfig) -> None:
+    """Tab 6: Agent Evaluation Lab — golden dataset, code graders, LLM-as-judge, full per-case transparency."""
+    from backlog_assistant import evaluation as ev
+
+    st.markdown("### 🧪 Agent Evaluation Lab")
     st.caption(
-        "Programmatically verifies all 7 mandatory evaluation criteria from the official Candidate Job Aid "
-        "across all 3 required sample scenarios using isolated deterministic replay (does not pollute live FinOps spend)."
+        "Evaluates the real agent against a versioned golden dataset of adversarial and edge-case documents. "
+        "Deterministic code graders run first, then a reference-guided LLM judge. Every case shows its input, "
+        "the exact prompt sent, the agent's output, and the evidence behind each check."
     )
 
-    samples_dir = Path(cfg.paths.samples_dir)
-    eval_cfg = cfg.with_overrides({"paths.audit_log_path": "outputs/rubric_eval_cache.jsonl"})
-    eval_engine = BacklogEngine(config=eval_cfg, force_offline=True)
-    scenario_specs = [
-        ("Scenario 1 (.txt)", "📝 Scenario 1: Sprint Planning Notes", "01_sprint_planning_notes.txt", "#10a37f"),
-        ("Scenario 2 (.md)", "🚨 Scenario 2: SEV-1 Outage Postmortem", "02_incident_postmortem.md", "#f59e0b"),
-        ("Scenario 3 (.pdf)", "📕 Scenario 3: PCI-DSS Compliance Spec", "03_pci_compliance_spec.pdf", "#3b82f6"),
-    ]
-    results = [eval_engine.analyze(samples_dir / fname) for _, _, fname, _ in scenario_specs]
-
-    valid_priorities = set(cfg.priority_levels) if cfg.priority_levels else {"P0", "P1", "P2", "P3"}
-    valid_fibonacci = {1, 2, 3, 5, 8, 13}
-
-    def _eval_scenario(res_obj: BacklogAnalysisResult) -> dict[str, tuple[bool, str]]:
-        stories = res_obj.stories
-        # 1. Multi-Format Ingestion
-        c1_ok = bool(stories) and bool(res_obj.metadata.document_sha256)
-        c1_msg = f"{'✅ PASS' if c1_ok else '❌ FAIL'} ({len(stories)} stories)"
-
-        # 2. Testable Acceptance Criteria (>= 3 per story)
-        min_acs = min((len(s.acceptance_criteria) for s in stories), default=0)
-        c2_ok = bool(stories) and min_acs >= 3
-        c2_msg = f"{'✅ PASS' if c2_ok else '❌ FAIL'} (Min {min_acs} ACs)"
-
-        # 3. Priority & Fibonacci Effort Estimation
-        prio_ok = bool(stories) and all(
-            s.priority in valid_priorities
-            and bool(s.priority_rationale.strip())
-            and s.story_points in valid_fibonacci
-            for s in stories
+    with st.expander("📘 How this evaluation works (methodology)", expanded=False):
+        st.markdown(
+            "1. **Hermetic golden dataset**: `evals/golden_dataset.json` holds versioned test cases. Each one targets a known "
+            "LLM failure mode (missed requirements, false or missed deduplication, policy conflicts, PII leakage, prompt "
+            "injection, invented SLAs, tickets made from chatter, multilingual input, priority mistakes). Every run uses a "
+            "**frozen backlog fixture** (`evals/fixtures/eval_backlog.json`) so results never depend on the live backlog.\n"
+            "2. **Code graders first**: deterministic, explainable checks like schema validity, AC count, Fibonacci points, "
+            "HITL policy, PII leakage, injection, required-topic coverage, backlog links, numeric grounding and priority triage.\n"
+            "3. **LLM-as-judge second**: a rubric with anchored 1–5 scores, guided by reference notes. The judge writes its "
+            "reasoning *before* each score and runs on a different, stronger model than the agent to limit self-preference bias.\n"
+            "4. **Severity-gated verdict**: a case **passes only if every 🔴 Critical and 🟠 Major check passes**. "
+            "The weighted score (Critical 3 / Major 2 / Minor 1) is for trend tracking.\n"
+            "5. **Real cost & regressions**: token usage comes from the OpenAI responses (not estimates). Each run is saved "
+            "with dataset, prompt, model and git versions and compared with the previous run.\n\n"
+            "Code graders alone are necessary but not sufficient: keyword coverage can be satisfied by text copied from "
+            "the input. That is why the offline heuristic baseline can look decent on code checks and the LLM judge is "
+            "needed to assess real quality."
         )
-        total_pts = sum(s.story_points for s in stories)
-        c3_msg = f"{'✅ PASS' if prio_ok else '❌ FAIL'} ({total_pts} total pts)"
 
-        # 4. Backlog Deduplication & Alignment
-        align_labels = sorted({getattr(s.backlog_alignment, "value", str(s.backlog_alignment)) for s in stories})
-        linked_ids = sorted({bid for s in stories for bid in s.related_backlog_ids})
-        c4_ok = bool(stories) and bool(align_labels) and bool(linked_ids)
-        c4_msg = f"{'✅ PASS' if c4_ok else '❌ FAIL'} ({', '.join(linked_ids) or 'None'})"
+    dataset = ev.load_dataset()
+    has_key = bool(os.getenv("OPENAI_API_KEY", "").strip())
 
-        # 5. Anti-Hallucination & Ambiguity
-        n_q = len(res_obj.summary.open_questions)
-        n_r = len(res_obj.summary.risks_and_dependencies)
-        c5_ok = n_q > 0 and n_r > 0
-        c5_msg = f"{'✅ PASS' if c5_ok else '❌ FAIL'} ({n_q} Qs, {n_r} risks)"
-
-        # 6. Configurable Without Code Changes
-        c6_ok = bool(cfg.id_prefix.strip()) and all(s.id.startswith(f"{cfg.id_prefix}-") for s in stories)
-        c6_msg = f"{'✅ PASS' if c6_ok else '❌ FAIL'} (Prefix {cfg.id_prefix}-)"
-
-        # 7. FDE Production Guardrails (HITL + SHA-256 + Audit + Tests)
-        hitl_cnt = sum(1 for s in stories if s.requires_human_approval)
-        c7_ok = bool(res_obj.metadata.document_sha256) and Path("tests/test_assistant.py").exists()
-        c7_msg = f"{'✅ PASS' if c7_ok else '❌ FAIL'} (HITL={hitl_cnt})"
-
-        return {
-            "c1": (c1_ok, c1_msg),
-            "c2": (c2_ok, c2_msg),
-            "c3": (prio_ok, c3_msg),
-            "c4": (c4_ok, c4_msg),
-            "c5": (c5_ok, c5_msg),
-            "c6": (c6_ok, c6_msg),
-            "c7": (c7_ok, c7_msg),
-        }
-
-    evals = [_eval_scenario(r) for r in results]
-    total_checks = len(evals) * 7
-    passed_checks = sum(1 for ev in evals for ok, _ in ev.values() if ok)
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Certification Score", f"{passed_checks} / {total_checks} Checks", "100% Pass" if passed_checks == total_checks else "Action Needed")
-    m2.metric("Scenarios Verified", "3 / 3 Formats", ".txt • .md • .pdf")
-    m3.metric("Total Stories Extracted", f"{sum(len(r.stories) for r in results)}", f"{sum(sum(s.story_points for s in r.stories) for r in results)} Fibonacci pts")
-    m4.metric("HITL Security Gates", f"{sum(sum(1 for s in r.stories if s.requires_human_approval) for r in results)} Flagged", "PII & Risk Shield Active")
-
-    st.markdown("#### ✅ Part 1: Official 7-Criterion RDE Candidate Job Aid Compliance Matrix")
-    criteria_defs = [
-        (
-            "c1",
-            "1. Multi-Format Ingestion",
-            "Parse unstructured .txt, .md, and binary .pdf documents cleanly",
-            "src/backlog_assistant/parser.py (extract_document_text + pypdf)",
-        ),
-        (
-            "c2",
-            "2. Testable Acceptance Criteria",
-            "Every generated user story MUST include >= 3 concrete, testable Acceptance Criteria",
-            "Pydantic @field_validator('acceptance_criteria') enforces >= 3",
-        ),
-        (
-            "c3",
-            "3. Priority & Effort Estimation",
-            "Assign P0-P3 priority, explicit priority rationale, and Fibonacci story points (1,2,3,5,8,13)",
-            "GeneratedUserStory.priority, priority_rationale & story_points",
-        ),
-        (
-            "c4",
-            "4. Backlog Deduplication & Alignment",
-            "Compare against existing backlog & classify as NEW, UPDATES_EXISTING, DUPLICATE, or CONFLICT",
-            "Subagent 3 (backlog-auditor) + related_backlog_ids",
-        ),
-        (
-            "c5",
-            "5. Anti-Hallucination & Ambiguity",
-            "Never invent missing specs; surface ambiguities in open_questions & risks_and_dependencies",
-            "RequirementSummary.open_questions & risks_and_dependencies",
-        ),
-        (
-            "c6",
-            "6. Configurable Without Code Changes",
-            "Switch domain, persona, ticket prefix, and models via JSON config, CLI --set, or env vars",
-            "config/scenario_config.json + config/presets/incident_triage_scenario.json",
-        ),
-        (
-            "c7",
-            "7. FDE Production Guardrails",
-            "Pre-LLM PII redaction, HITL approval gate, Real-Time FinOps telemetry, SHA-256 audit & pytest suite",
-            "security-reviewer + outputs/audit_trail.jsonl + tests/test_assistant.py",
-        ),
-    ]
-    rubric_rows = [
-        {
-            "Criterion #": label,
-            "Job Aid Requirement": req,
-            "Scenario 1 (.txt)": evals[0][key][1],
-            "Scenario 2 (.md)": evals[1][key][1],
-            "Scenario 3 (.pdf)": evals[2][key][1],
-            "Implementation Evidence": evidence,
-        }
-        for key, label, req, evidence in criteria_defs
-    ]
-    st.dataframe(rubric_rows, use_container_width=True, hide_index=True)
-
-    st.markdown("#### 📊 Part 2: Side-by-Side Scenario Scorecard Summary")
-    sc_cols = st.columns(3)
-    for col, (_, title, fname, badge_color), res_obj, ev in zip(sc_cols, scenario_specs, results, evals):
-        with col:
-            aligns = ", ".join(sorted({getattr(s.backlog_alignment, "value", str(s.backlog_alignment)) for s in res_obj.stories}))
-            hitls = sum(1 for s in res_obj.stories if s.requires_human_approval)
-            total_pts = sum(s.story_points for s in res_obj.stories)
-            total_acs = sum(len(s.acceptance_criteria) for s in res_obj.stories)
-            sc_passed = sum(1 for ok, _ in ev.values() if ok)
-            card_html = (
-                f'<div style="border:1.5px solid {badge_color}; border-radius:16px; padding:16px; background:#141414;">'
-                f'<div style="font-weight:700; font-size:0.98rem; color:{badge_color};">{title}</div>'
-                f'<div style="font-size:0.75rem; color:#9aa0a6;">File: <code>{fname}</code> • SHA-256: <code>{res_obj.metadata.document_sha256[:12]}...</code></div>'
-                f'<div style="font-size:1.35rem; font-weight:800; margin:8px 0; color:#fff;">{"✅" if sc_passed == 7 else "⚠️"} {sc_passed} / 7 Rubric Checks Passed</div>'
-                f'<div style="font-size:0.82rem; line-height:1.65; color:#cbd5e1;">'
-                f'• <strong>Extracted Stories:</strong> {len(res_obj.stories)} stories ({total_pts} Fibonacci pts)<br>'
-                f'• <strong>Acceptance Criteria:</strong> {total_acs} total ACs (100% &ge;3 per story)<br>'
-                f'• <strong>Backlog Alignments:</strong> <code>{aligns}</code><br>'
-                f'• <strong>HITL Security Gates:</strong> {hitls} stories require human sign-off<br>'
-                f'• <strong>Ambiguities Surfaced:</strong> {len(res_obj.summary.open_questions)} open questions • {len(res_obj.summary.risks_and_dependencies)} risks/dependencies<br>'
-                f'• <strong>Offline Replay Footprint:</strong> {res_obj.metadata.estimated_tokens:,} est. tokens ($0.00 live spend)'
-                f'</div></div>'
+    # ---------------- Run controls ----------------
+    with st.container(border=True):
+        st.markdown("**▶️ Run a new evaluation**")
+        c1, c2, c3, c4 = st.columns([1.4, 1.1, 1.1, 1.6])
+        with c1:
+            mode = st.radio(
+                "Agent under test",
+                ["Live agent (OpenAI)", "Offline heuristic baseline"],
+                index=0 if has_key else 1,
+                disabled=not has_key,
+                key="eval_mode",
+                help="The live agent calls OpenAI and costs real money. The offline baseline is the no-LLM fallback, used as a floor reference.",
             )
-            st.markdown(card_html, unsafe_allow_html=True)
+        offline = mode != "Live agent (OpenAI)"
+        with c2:
+            judge_on = st.toggle("LLM judge", value=not offline, disabled=offline, key="eval_judge_on")
+        with c3:
+            judge_model = st.selectbox("Judge model", ["gpt-4o", "gpt-4.1", "gpt-4o-mini"], index=0,
+                                       disabled=offline or not judge_on, key="eval_judge_model")
+        with c4:
+            cats = sorted({c.category for c in dataset.cases})
+            sel_cats = st.multiselect("Categories", cats, default=cats, key="eval_cats")
+        sel_cases = [c.id for c in dataset.cases if c.category in sel_cats]
+        st.caption(
+            f"Dataset `{dataset.dataset_id}` v{dataset.dataset_version} • {len(sel_cases)} of {len(dataset.cases)} cases selected • "
+            f"Agent model: `{cfg.subagent_models.extractor_agent}` • Prompt `{ev.PROMPT_VERSION}`"
+            + ("" if offline else f" • Typical cost: ~$0.002/case for the agent + ~$0.01/case for a {judge_model} judge")
+        )
+        if not has_key:
+            st.warning("OPENAI_API_KEY is not set, so only the offline heuristic baseline can run.")
+        if st.button("🚀 Run evaluation", type="primary", disabled=not sel_cases, key="eval_run_btn"):
+            prog = st.progress(0.0, text="Starting…")
+            log_box = st.empty()
+            done_lines: list[str] = []
 
-    st.markdown("#### 🔬 Part 3: Deep-Dive Story, Acceptance Criteria & Open Questions Inspector")
-    sub_tabs = st.tabs([
-        "📝 Scenario 1 Stories (01_sprint_planning_notes.txt)",
-        "🚨 Scenario 2 Stories (02_incident_postmortem.md)",
-        "📕 Scenario 3 Stories (03_pci_compliance_spec.pdf)",
-    ])
-    for sub_tab, res_obj in zip(sub_tabs, results):
-        with sub_tab:
-            st.markdown(f"**Document Title:** {res_obj.summary.document_title}")
-            st.markdown(f"**Executive Summary:** {res_obj.summary.executive_summary}")
-            story_table = [
-                {
-                    "Story ID": s.id,
-                    "Title": s.title,
-                    "Category": getattr(s.category, "value", str(s.category)),
-                    "Priority": s.priority,
-                    "Points": s.story_points,
-                    "Alignment": getattr(s.backlog_alignment, "value", str(s.backlog_alignment)),
-                    "Related Backlog IDs": ", ".join(s.related_backlog_ids) if s.related_backlog_ids else "None (Net-New)",
-                    "AC Count": f"{len(s.acceptance_criteria)} ACs ({'PASS' if len(s.acceptance_criteria) >= 3 else 'FAIL'})",
-                    "Confidence": f"{int(s.confidence_score * 100)}%",
-                    "HITL Gate": "🚨 YES (Sign-off Required)" if s.requires_human_approval else "✅ Auto-Ready",
-                }
-                for s in res_obj.stories
-            ]
-            st.dataframe(story_table, use_container_width=True, hide_index=True)
+            def _cb(i: int, n: int, res: Any) -> None:
+                done_lines.append(f"{_eval_status_icon(res.status)} {res.case.id} — {res.case.name} ({res.score:.0%})")
+                prog.progress(i / n, text=f"Evaluated {i}/{n} cases")
+                log_box.code("\n".join(done_lines), language="text")
 
-            with st.expander("🔍 Inspect Full Story Descriptions, Priority Rationales & Acceptance Criteria", expanded=False):
-                for s in res_obj.stories:
-                    st.markdown(
-                        f"**{s.id} — {s.title}** (`{s.priority}` • `{s.story_points} pts` • "
-                        f"`{getattr(s.backlog_alignment, 'value', str(s.backlog_alignment))}`)"
+            with st.spinner("Running agent and graders on each case…"):
+                new_run = ev.run_evaluation(cfg, offline=offline, judge_enabled=judge_on, judge_model=judge_model,
+                                            case_ids=sel_cases, progress_cb=_cb)
+            st.session_state["eval_selected_run"] = new_run.run_id
+            st.success(f"Run `{new_run.run_id}` finished in {new_run.duration_s:.1f}s: "
+                       f"{new_run.summary.passed}/{new_run.summary.total_cases} cases passed.")
+
+    # ---------------- Run selection ----------------
+    run_files = ev.list_runs()
+    if not run_files:
+        st.info("No evaluation runs yet. Click **Run evaluation** to benchmark the agent.")
+        return
+    run_ids = [p.stem for p in run_files]
+    default_id = st.session_state.get("eval_selected_run", run_ids[0])
+    runs_cache: dict[str, Any] = {}
+
+    def _load(run_id: str) -> Any:
+        if run_id not in runs_cache:
+            runs_cache[run_id] = ev.load_run(ev.DEFAULT_RUNS_DIR / f"{run_id}.json")
+        return runs_cache[run_id]
+
+    def _label(run_id: str) -> str:
+        try:
+            r = _load(run_id)
+            return (f"{r.started_at_utc[:19].replace('T', ' ')} UTC • {r.mode} • {r.agent_model} • "
+                    f"{r.summary.passed}/{r.summary.total_cases} passed")
+        except Exception:
+            return run_id
+
+    sel_run_id = st.selectbox("📂 Evaluation run", run_ids, index=run_ids.index(default_id) if default_id in run_ids else 0,
+                              format_func=_label, key="eval_run_select")
+    run = _load(sel_run_id)
+    idx = run_ids.index(sel_run_id)
+    prev_run = _load(run_ids[idx + 1]) if idx + 1 < len(run_ids) else None
+    s = run.summary
+
+    # ---------------- Headline KPIs ----------------
+    st.markdown("#### 📊 Run Summary")
+    k = st.columns(6)
+    prev_s = prev_run.summary if prev_run else None
+    k[0].metric("Cases passed", f"{s.passed}/{s.total_cases}", f"{(s.pass_rate - prev_s.pass_rate):+.0%} vs prev" if prev_s else None)
+    k[1].metric("Pass rate", f"{s.pass_rate:.0%}")
+    k[2].metric("Weighted score", f"{s.avg_score:.0%}", f"{(s.avg_score - prev_s.avg_score):+.1%}" if prev_s else None)
+    k[3].metric("Critical failures", s.critical_failures,
+                f"{s.critical_failures - prev_s.critical_failures:+d}" if prev_s else None, delta_color="inverse")
+    k[4].metric("Judge avg (1–5)", f"{s.judge_avg:.2f}" if s.judge_avg is not None else "—")
+    k[5].metric("Real cost", f"${s.total_cost_usd:.4f}", f"agent ${s.agent_cost_usd:.4f} • judge ${s.judge_cost_usd:.4f}",
+                delta_color="off")
+    st.caption(
+        f"Run `{run.run_id}` • mode `{run.mode}` • agent `{run.agent_model}` • judge `{run.judge_model or 'disabled'}` • "
+        f"prompt `{run.prompt_version}` • dataset v{run.dataset_version} • commit `{run.git_commit or 'n/a'}` • "
+        f"duration {run.duration_s:.1f}s • latency p50 {s.p50_latency_ms:,} ms / p95 {s.p95_latency_ms:,} ms • "
+        f"{s.total_tokens:,} real tokens"
+    )
+    if run.mode != "live_agent":
+        st.warning("This run used the offline heuristic baseline (no LLM). It is a floor reference, not the real agent.")
+
+    if prev_run:
+        diff = ev.compare_runs(prev_run, run)
+        if diff["regressions"]:
+            st.error(f"🔻 Regressions vs previous run: {', '.join(diff['regressions'])}")
+        if diff["fixes"]:
+            st.success(f"🔺 Fixed vs previous run: {', '.join(diff['fixes'])}")
+        if not diff["regressions"] and not diff["fixes"]:
+            st.caption("↔️ No pass/fail changes vs the previous run.")
+
+    # ---------------- Breakdown ----------------
+    b1, b2 = st.columns([1, 1.4])
+    with b1:
+        st.markdown("**By failure-mode category**")
+        st.dataframe(
+            [{"Category": cat, "Cases": v["cases"], "Passed": v["passed"], "Pass rate": f"{v['pass_rate']:.0%}"}
+             for cat, v in sorted(s.by_category.items())],
+            hide_index=True, width="stretch",
+        )
+    with b2:
+        st.markdown("**By check (across all cases)**")
+        st.dataframe(
+            [{"Check": v["name"], "Severity": _eval_severity_badge(v["severity"]),
+              "Pass": v["pass"], "Fail": v["fail"], "Skipped": v["skip"],
+              "Pass rate": f"{v['pass'] / (v['pass'] + v['fail']):.0%}" if (v["pass"] + v["fail"]) else "—"}
+             for v in sorted(s.by_check.values(), key=lambda x: (x["fail"] == 0, x["name"]))],
+            hide_index=True, width="stretch",
+        )
+
+    # ---------------- Case matrix ----------------
+    st.markdown("#### 🧩 Case Overview")
+    st.dataframe(
+        [{
+            "Status": f"{_eval_status_icon(c.status)} {c.status}",
+            "Case": c.case.id,
+            "Name": c.case.name,
+            "Category": c.case.category,
+            "Score": f"{c.score:.0%}",
+            "Checks": f"{sum(ch.status == 'pass' for ch in c.checks)}/{sum(ch.status in ('pass', 'fail') for ch in c.checks)}",
+            "Failed checks": ", ".join(ch.name for ch in c.checks if ch.status == "fail") or "—",
+            "Stories": len((c.output or {}).get("stories", [])),
+            "Latency": f"{c.metrics.latency_ms:,} ms",
+            "Cost": f"${c.metrics.cost_usd + c.metrics.judge_cost_usd:.4f}",
+        } for c in run.cases],
+        hide_index=True, width="stretch",
+    )
+
+    # ---------------- Per-case drill-down ----------------
+    st.markdown("#### 🔍 Case Inspector")
+    only_failed = st.toggle("Show only failing cases", value=False, key="eval_only_failed")
+    shown = [c for c in run.cases if not only_failed or c.status != "PASS"]
+    if not shown:
+        st.success("All cases passed 🎉")
+    for c in shown:
+        n_fail = sum(ch.status == "fail" for ch in c.checks)
+        header = (f"{_eval_status_icon(c.status)} {c.case.id} · {c.case.name} — {c.case.category} · score {c.score:.0%}"
+                  + (f" · {n_fail} failed check(s)" if n_fail else ""))
+        with st.expander(header, expanded=False):
+            t_case, t_checks, t_in, t_out, t_judge, t_metrics = st.tabs(
+                ["🧾 Test case", "🔍 Checks", "📥 Input & prompt", "📤 Agent output", "⚖️ LLM judge", "⏱️ Metrics"]
+            )
+            with t_case:
+                st.markdown(f"**What is tested:** {c.case.name}")
+                st.markdown(f"**Why it matters:** {c.case.why_it_matters}")
+                st.markdown(f"**Reference answer (used by the judge):** {c.case.reference_notes}")
+                st.markdown("**Machine-checkable expectations:**")
+                st.json(c.case.expectations, expanded=True)
+            with t_checks:
+                if c.error:
+                    st.error("The agent raised an error on this case.")
+                    st.code(c.error, language="text")
+                failed = [ch for ch in c.checks if ch.status == "fail"]
+                for ch in failed:
+                    msg = f"**{_eval_severity_badge(ch.severity)} — {ch.name}**  \nExpected: {ch.expected}  \nActual: {ch.actual}"
+                    if ch.evidence:
+                        msg += "  \nEvidence: " + "; ".join(ch.evidence[:6])
+                    if ch.explanation:
+                        msg += f"  \n_{ch.explanation[:600]}_"
+                    (st.error if ch.severity in ("critical", "major") else st.warning)(msg)
+                st.dataframe(
+                    [{"": _eval_status_icon(ch.status), "Check": ch.name,
+                      "Grader": "🤖 LLM judge" if ch.grader == "llm_judge" else "🧮 Code",
+                      "Severity": _eval_severity_badge(ch.severity), "Expected": ch.expected, "Actual": ch.actual,
+                      "Evidence": " | ".join(ch.evidence[:5]) or (ch.explanation[:200] if ch.grader == "llm_judge" else "")}
+                     for ch in sorted(c.checks, key=lambda x: (x.status == "pass", -ev.SEVERITY_WEIGHTS.get(x.severity, 0)))],
+                    hide_index=True, width="stretch",
+                )
+            with t_in:
+                i1, i2 = st.columns(2)
+                with i1:
+                    st.markdown(f"**Original document** (`.{c.case.source_format}`)")
+                    st.code(c.case.document, language="markdown" if c.case.source_format == "md" else "text", wrap_lines=True)
+                with i2:
+                    st.markdown(f"**Sanitized text sent to the LLM** ({c.metrics.pii_redacted_count} redaction(s))")
+                    st.code(c.sanitized_input, language="text", wrap_lines=True)
+                with st.popover("📜 View exact system & user prompt"):
+                    st.markdown("**System prompt**")
+                    st.code(c.system_prompt, language="text", wrap_lines=True)
+                    st.markdown("**User prompt**")
+                    st.code(c.user_prompt, language="text", wrap_lines=True)
+            with t_out:
+                out = c.output or {}
+                summ = out.get("summary", {})
+                if summ:
+                    st.markdown(f"**{summ.get('document_title', '')}**: {summ.get('executive_summary', '')}")
+                stories = out.get("stories", [])
+                if stories:
+                    st.dataframe(
+                        [{"ID": s_["id"], "Title": s_["title"], "Priority": s_["priority"], "Pts": s_["story_points"],
+                          "Category": s_["category"], "Alignment": s_["backlog_alignment"],
+                          "Refs": ", ".join(s_.get("related_backlog_ids", [])) or "—",
+                          "HITL": "🚨" if s_.get("requires_human_approval") else "—",
+                          "ACs": len(s_.get("acceptance_criteria", []))} for s_ in stories],
+                        hide_index=True, width="stretch",
                     )
-                    st.caption(f"Priority Rationale: {s.priority_rationale}")
-                    st.markdown(f"**User Story:** {s.user_story}")
-                    st.markdown(f"**Technical Description:** {s.technical_description}")
-                    for idx, ac in enumerate(s.acceptance_criteria, 1):
-                        st.markdown(f"  {idx}. {ac}")
-                    st.divider()
+                    for s_ in stories:
+                        st.markdown(f"**{s_['id']} — {s_['title']}**  \n_{s_['user_story']}_")
+                        st.caption(f"{s_['priority']}: {s_['priority_rationale']} • Alignment note: {s_.get('alignment_notes') or '—'}")
+                        st.markdown("\n".join(f"- {ac}" for ac in s_.get("acceptance_criteria", [])))
+                else:
+                    st.info("The agent produced no stories for this document.")
+                q1, q2 = st.columns(2)
+                with q1:
+                    st.markdown("**❓ Open questions**")
+                    st.markdown("\n".join(f"- {q}" for q in summ.get("open_questions", [])) or "—")
+                with q2:
+                    st.markdown("**⚠️ Risks & dependencies**")
+                    st.markdown("\n".join(f"- {r_}" for r_ in summ.get("risks_and_dependencies", [])) or "—")
+                with st.popover("🧾 Raw JSON output"):
+                    st.json(out, expanded=False)
+            with t_judge:
+                if c.judge is None:
+                    st.info("The LLM judge did not run for this case (offline mode, disabled, or no API key).")
+                else:
+                    dims = [("faithfulness", "Faithfulness"), ("completeness", "Completeness"),
+                            ("ac_testability", "AC testability"), ("story_quality", "Story quality (INVEST)"),
+                            ("backlog_reasoning", "Backlog & priority reasoning")]
+                    jc = st.columns(len(dims))
+                    for col, (key, label) in zip(jc, dims):
+                        col.metric(label, f"{getattr(c.judge, key).score}/5")
+                    for key, label in dims:
+                        d = getattr(c.judge, key)
+                        st.markdown(f"**{label} — {d.score}/5**")
+                        st.caption(d.reasoning)
+                    st.info(f"**Judge summary ({run.judge_model}):** {c.judge.overall_comment}")
+            with t_metrics:
+                m = c.metrics
+                mc = st.columns(4)
+                mc[0].metric("Agent latency", f"{m.latency_ms:,} ms")
+                mc[1].metric("Agent tokens (in/out)", f"{m.input_tokens:,} / {m.output_tokens:,}")
+                mc[2].metric("Agent cost", f"${m.cost_usd:.5f}")
+                mc[3].metric("Judge cost", f"${m.judge_cost_usd:.5f}")
+                st.caption(f"Models billed: {', '.join(m.models_used) or 'none (offline)'} • "
+                           f"Judge tokens in/out: {m.judge_input_tokens:,} / {m.judge_output_tokens:,}")
 
-            q_col, c_col = st.columns(2)
-            with q_col:
-                st.markdown("**❓ Surfaced Open Questions (Anti-Hallucination Guardrail):**")
-                for q in res_obj.summary.open_questions:
-                    st.markdown(f"- ❓ {q}")
-            with c_col:
-                st.markdown("**🔒 Extracted Risks, Dependencies & Compliance Constraints:**")
-                for c_item in res_obj.summary.risks_and_dependencies:
-                    st.markdown(f"- 🔒 {c_item}")
+    # ---------------- History ----------------
+    with st.expander("📈 Run history & trend", expanded=False):
+        hist = []
+        for rid in reversed(run_ids[:30]):
+            try:
+                r = _load(rid)
+            except Exception:
+                continue
+            hist.append({"Run": r.started_at_utc[:16].replace("T", " "), "Mode": r.mode, "Agent": r.agent_model,
+                         "Prompt": r.prompt_version, "Commit": r.git_commit, "Pass rate": r.summary.pass_rate,
+                         "Score": r.summary.avg_score, "Judge": r.summary.judge_avg, "Cost $": r.summary.total_cost_usd})
+        if hist:
+            st.line_chart({"Pass rate": [h["Pass rate"] for h in hist], "Weighted score": [h["Score"] for h in hist]})
+            st.dataframe(list(reversed(hist)), hide_index=True, width="stretch")
+        st.download_button("⬇️ Download this run (JSON)", data=run.model_dump_json(indent=2),
+                           file_name=f"eval_run_{run.run_id}.json", mime="application/json", key="eval_dl")
 
 
 def build_unified_events(
@@ -3989,13 +4082,13 @@ def render_portal() -> None:
     history = ensure_initial_telemetry(default_cfg)
 
     # Top-level separated tabs — Tab 1 opens directly into the pure ChatGPT "Where should we begin?" view!
-    tab_chat, tab_kanban, tab_pipeline, tab_graph, tab_finops, tab_rubric, tab_alerts, tab_settings = st.tabs([
+    tab_chat, tab_kanban, tab_pipeline, tab_graph, tab_finops, tab_evals, tab_alerts, tab_settings = st.tabs([
         "💬 1. Ask ChatGPT (Conversational Agent)",
         "📋 2. Kanban Board (Click Cards)",
         "📥 3. Doc-to-Tasks Pipeline",
         "🕸️ 4. Agent & MCP Graph",
         "💰 5. FinOps & Cost Savings",
-        "🏆 6. Certification Rubric",
+        "🧪 6. Agent Evaluation Lab",
         "🚨 7. Error & Log Explorer",
         "⚙️ 8. Settings & Upload",
     ])
@@ -4022,8 +4115,8 @@ def render_portal() -> None:
     with tab_finops:
         render_clear_finops_section(cfg, latest)
 
-    with tab_rubric:
-        render_detailed_rubric_dashboard(cfg)
+    with tab_evals:
+        render_evaluation_lab(cfg)
 
     with tab_alerts:
         render_searchable_error_and_log_portal(cfg, latest, history)
