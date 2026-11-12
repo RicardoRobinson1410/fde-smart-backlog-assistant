@@ -584,12 +584,17 @@ def _answer_with_live_openai_or_analytical_engine(
         if str(task_action.get("op", "")).lower() == "create":
             raw_title = str(task_action.get("title", "")).strip()
             norm_title = re.sub(r"[^a-z0-9\s]", "", raw_title.lower()).strip()
+            q_remainder = re.sub(
+                r"^(i\s+need\s+a\s+new\s+|create\s+(a\s+)?(new\s+)?|add\s+(a\s+)?(new\s+)?|make\s+(a\s+)?(new\s+)?)(task|ticket|story)\s*(to|for|:)?\s*",
+                "",
+                q.lower().rstrip("?.!"),
+            ).strip()
             generic_titles = {
                 "", "task", "new task", "a new task", "create task", "create new task",
                 "create a new task", "add task", "add a task", "add a new task",
                 "make a task", "make a new task", "new engineering task", "story", "new story", "user story",
             }
-            if norm_title in generic_titles or len(norm_title.split()) < 2:
+            if norm_title in generic_titles or len(norm_title.split()) < 2 or len(q_remainder.split()) < 2:
                 steps.append(
                     {
                         "title": "📝 Clarification Needed — Gathering Task Details Before Creation",
