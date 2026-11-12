@@ -4216,112 +4216,133 @@ def build_unified_events(
     cfg: ScenarioConfig,
     latest: BacklogAnalysisResult,
     history: list[dict[str, Any]],
+    include_offline: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build a unified, searchable list of rich diagnostic alert & log events."""
+    """Build real, audit-backed FDE observability events from outputs/audit_trail.jsonl and active session errors."""
     events: list[dict[str, Any]] = []
 
-    for item in st.session_state.get("custom_alerts", []):
-        events.append(item)
-
-    samples_dir = Path(cfg.paths.samples_dir)
-    eval_cfg = cfg.with_overrides({"paths.audit_log_path": "outputs/rubric_eval_cache.jsonl"})
-    eval_engine = BacklogEngine(config=eval_cfg, force_offline=True)
-    all_results = [
-        ("Active Run", latest),
-        ("01_sprint_planning_notes.txt", eval_engine.analyze(samples_dir / "01_sprint_planning_notes.txt")),
-        ("02_incident_postmortem.md", eval_engine.analyze(samples_dir / "02_incident_postmortem.md")),
-        ("03_pci_compliance_spec.pdf", eval_engine.analyze(samples_dir / "03_pci_compliance_spec.pdf")),
-    ]
-    seen_keys: set[str] = set()
-    default_ts = datetime.now(timezone.utc).isoformat()
-    for _, res_obj in all_results:
-        src_file = Path(res_obj.metadata.source_file).name
-        ts_val = getattr(res_obj.metadata, "processed_at_utc", default_ts)
-        for s in res_obj.stories:
-            align_val = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
-            dedup_key = f"{src_file}:{s.id}:{align_val}"
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
-
+    # 1. Surface any active run conflicts / HITL gates from the current session result
+    if latest and latest.stories:
+        src_file = Path(latest.metadata.source_file).name
+        ts_val = datetime.now(timezone.utc).isoformat()
+        for s in latest.stories:
             if s.backlog_alignment == BacklogAlignment.CONFLICT:
                 events.append({
-                    "severity": "CRITICAL_CONFLICT",
-                    "badge": "🚨 CRITICAL CONFLICT",
-                    "color": "#e11d48",
+                    "severity": "ERROR_CONFLICT",
+                    "badge": "🚨 CONFLICT",
+                    "category": "Errors & Conflicts",
+                    "is_live": latest.metadata.execution_mode != "offline_deterministic_replay",
                     "timestamp": ts_val,
                     "source_file": src_file,
-                    "story_id": s.id,
-                    "title": f"Architectural Conflict: {s.id} ({s.title}) contradicts {', '.join(s.related_backlog_ids)}",
-                    "summary": s.alignment_notes,
-                    "agent_node": f"Subagent 4: security-reviewer ({cfg.subagent_models.security_reviewer})",
-                    "sha256": res_obj.metadata.document_sha256,
+                    "ticket_id": s.id,
+                    "title": f"Backlog Conflict: {s.id} ({s.title}) vs {', '.join(s.related_backlog_ids) or 'existing'}",
+                    "summary": s.alignment_notes or "Requirement contradicts an existing backlog specification.",
+                    "agent_node": f"backlog_auditor / security_reviewer ({cfg.subagent_models.security_reviewer})",
+                    "trace": latest.metadata.agent_trace or ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"],
+                    "sha256": latest.metadata.document_sha256,
+                    "latency_ms": latest.metadata.latency_ms,
                     "remediation": (
-                        f"1. Do NOT auto-promote {s.id} to active sprint backlog.\n"
-                        f"2. Schedule Security Architecture review to supersede {', '.join(s.related_backlog_ids)} (3DES -> AES-256-GCM).\n"
-                        f"3. Approve in HITL Gate once migration window is confirmed."
-                    ),
-                    "payload": s.model_dump(),
-                })
-            elif s.backlog_alignment == BacklogAlignment.DUPLICATE:
-                events.append({
-                    "severity": "DUPLICATE_BLOCKED",
-                    "badge": "🛑 DUPLICATE BLOCKED",
-                    "color": "#8b5cf6",
-                    "timestamp": ts_val,
-                    "source_file": src_file,
-                    "story_id": s.id,
-                    "title": f"Duplicate Ticket Prevented: {s.id} ({s.title}) duplicates {', '.join(s.related_backlog_ids)}",
-                    "summary": s.alignment_notes,
-                    "agent_node": f"Subagent 3: backlog-auditor ({cfg.subagent_models.backlog_auditor})",
-                    "sha256": res_obj.metadata.document_sha256,
-                    "remediation": (
-                        f"1. Automatically blocked from creating a duplicate backlog ticket.\n"
-                        f"2. Link stakeholder notes directly to existing ticket {', '.join(s.related_backlog_ids)}."
+                        f"1. Hold {s.id} in HITL review before promoting to sprint.\n"
+                        f"2. Resolve architectural conflict with {', '.join(s.related_backlog_ids) or 'owner'}."
                     ),
                     "payload": s.model_dump(),
                 })
             elif s.requires_human_approval:
                 events.append({
-                    "severity": "HITL_REVIEW_GATE",
-                    "badge": "⚠️ HITL REVIEW GATE",
-                    "color": "#d97706",
+                    "severity": "HITL_GATE",
+                    "badge": "⚠️ HITL GATE",
+                    "category": "HITL & Task Actions",
+                    "is_live": latest.metadata.execution_mode != "offline_deterministic_replay",
                     "timestamp": ts_val,
                     "source_file": src_file,
-                    "story_id": s.id,
-                    "title": f"P0-Critical Human Sign-Off Required: {s.id} ({s.title})",
-                    "summary": f"{s.priority_rationale} (Confidence: {int(s.confidence_score*100)}%)",
-                    "agent_node": f"Subagent 4: security-reviewer ({cfg.subagent_models.security_reviewer})",
-                    "sha256": res_obj.metadata.document_sha256,
-                    "remediation": (
-                        f"1. Engineering Lead must verify acceptance criteria and capacity ({s.story_points} story pts).\n"
-                        f"2. Check related backlog dependencies: {', '.join(s.related_backlog_ids) or 'None'}."
-                    ),
+                    "ticket_id": s.id,
+                    "title": f"Human Approval Required: {s.id} ({s.title})",
+                    "summary": f"{s.priority_rationale} (Confidence: {int(s.confidence_score * 100)}%)",
+                    "agent_node": f"security_reviewer ({cfg.subagent_models.security_reviewer})",
+                    "trace": latest.metadata.agent_trace or ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"],
+                    "sha256": latest.metadata.document_sha256,
+                    "latency_ms": latest.metadata.latency_ms,
+                    "remediation": f"Review acceptance criteria and approve {s.id} ({s.story_points} pts) in Kanban / Pipeline.",
                     "payload": s.model_dump(),
                 })
 
-    for rec in history[:15]:
-        src_name = Path(str(rec.get("source_file", "unknown"))).name
-        pii_cnt = int(rec.get("pii_redacted_count", 0))
-        sev = "PII_SHIELD" if pii_cnt > 0 else "PIPELINE_AUDIT_LOG"
-        badge = f"🔒 PII SHIELD ({pii_cnt} MASKED)" if pii_cnt > 0 else "✅ PIPELINE AUDIT LOG"
-        color = "#3b82f6" if pii_cnt > 0 else "#10a37f"
-        stories_cnt = rec.get("stories_generated", rec.get("stories_count", 0))
+    # 2. Parse real immutable records from outputs/audit_trail.jsonl (newest first)
+    for rec in history:
+        exec_mode = str(rec.get("execution_mode", ""))
+        event_type = str(rec.get("event_type", ""))
+        is_offline = exec_mode == "offline_deterministic_replay"
+        if is_offline and not include_offline:
+            continue
+
+        ts_val = str(rec.get("timestamp_utc", ""))
+        pii_cnt = int(rec.get("pii_redacted_count", 0) or 0)
+        err_msg = str(rec.get("error", "") or "")
+
+        if event_type == "task_action_audit":
+            action = str(rec.get("action", "task_action")).upper()
+            tid = str(rec.get("task_id", "TASK"))
+            hitl = bool(rec.get("requires_human_approval", False))
+            sev = "HITL_GATE" if hitl else "TASK_ACTION"
+            badge = "🛡️ HITL TASK" if hitl else f"📋 TASK {action}"
+            cat = "HITL & Task Actions"
+            src = "Kanban / Chat Agent"
+            title = f"{action} {tid}: {rec.get('title', 'Backlog update')}"
+            summary = f"Priority: {rec.get('priority', '—')} • Approved by human: {rec.get('approved_by_human', False)}"
+            node = "Task Action Executor (HITL Policy Gate)"
+            remediation = "Verified and persisted to data/existing_backlog.json."
+            trace = ["intent_router", "risk_policy_gate", "backlog_store"]
+        elif err_msg:
+            sev = "ERROR_CONFLICT"
+            badge = "❌ ERROR"
+            cat = "Errors & Conflicts"
+            src = Path(str(rec.get("source_file", "pipeline"))).name
+            tid = str(rec.get("scenario_id", "ENGINE"))
+            title = f"Pipeline Error on {src}"
+            summary = err_msg
+            node = str(rec.get("model_name", "BacklogEngine"))
+            remediation = "Inspect exception details and retry or verify API connectivity."
+            trace = list(rec.get("agent_trace", []))
+        elif pii_cnt > 0:
+            sev = "PII_SHIELD"
+            badge = f"🔒 PII SHIELD ({pii_cnt})"
+            cat = "Security & PII"
+            src = Path(str(rec.get("source_file", "unknown"))).name
+            tid = f"{rec.get('stories_generated', 0)} stories"
+            title = f"PII Shield Masked {pii_cnt} Sensitive Token(s) in {src}"
+            summary = f"Mode: {exec_mode} • Model: {rec.get('model_name')} • Cost: ${float(rec.get('estimated_cost_usd', 0.0)):.5f}"
+            node = "ingest_node -> redact_pii_and_secrets()"
+            remediation = "Sensitive tokens were masked locally prior to LLM invocation."
+            trace = list(rec.get("agent_trace", []))
+        else:
+            sev = "AUDIT_OK"
+            badge = "✅ LIVE RUN" if not is_offline else "🧪 OFFLINE"
+            cat = "Healthy Runs"
+            src = Path(str(rec.get("source_file", "unknown"))).name
+            tid = f"{rec.get('stories_generated', 0)} stories"
+            title = f"Audited Run on {src} ({rec.get('latency_ms', 0)} ms)"
+            summary = (
+                f"Mode: {exec_mode} • Model: {rec.get('model_name')} • "
+                f"Tokens: {rec.get('estimated_tokens', 0):,} • Cost: ${float(rec.get('estimated_cost_usd', 0.0)):.5f}"
+            )
+            node = "LangGraph 4-Node StateGraph"
+            remediation = "No action required. Immutable SHA-256 record logged."
+            trace = list(rec.get("agent_trace", []))
+
         events.append({
             "severity": sev,
             "badge": badge,
-            "color": color,
-            "timestamp": str(rec.get("timestamp_utc", "")),
-            "source_file": src_name,
-            "story_id": f"{stories_cnt} stories",
-            "title": f"Audited Pipeline Run on {src_name} — {stories_cnt} stories, {rec.get('latency_ms', 0)} ms",
-            "summary": (
-                f"Execution mode: {rec.get('execution_mode')} • Tokens: {rec.get('estimated_tokens')} • "
-                f"Cost: ${float(rec.get('estimated_cost_usd', 0.0)):.5f} • PII Redacted: {pii_cnt}"
-            ),
-            "agent_node": "LangGraph 4-Node StateGraph Orchestrator",
+            "category": cat,
+            "is_live": not is_offline,
+            "timestamp": ts_val,
+            "source_file": src,
+            "ticket_id": tid,
+            "title": title,
+            "summary": summary,
+            "agent_node": node,
+            "trace": trace,
             "sha256": str(rec.get("document_sha256", "")),
-            "remediation": "Immutable compliance record persisted in outputs/audit_trail.jsonl. No remediation needed.",
+            "latency_ms": int(rec.get("latency_ms", 0) or 0),
+            "remediation": remediation,
             "payload": rec,
         })
 
@@ -4333,157 +4354,204 @@ def render_searchable_error_and_log_portal(
     latest: BacklogAnalysisResult,
     history: list[dict[str, Any]],
 ) -> None:
-    """Tab 6: Interactive, filterable, click-to-inspect Error, Security & Log Portal."""
-    st.markdown("### 🚨 Searchable Error, Security & Audit Log Explorer")
+    """Tab 7: Production FDE Observability, Security & Audit Log Explorer."""
+    st.markdown("### 🚨 Production Audit, Security & Error Explorer")
     st.caption(
-        "Filter events by keyword, ticket ID, or severity, and **click any event card** to inspect its plain-English root cause, triggering agent node, remediation steps, and JSON payload."
+        "Real-time observability backed by `outputs/audit_trail.jsonl`. Filter by severity, source, or keyword and "
+        "**click anywhere on any log row** to inspect its execution trace, SHA-256 provenance, and JSON payload."
     )
 
-    sim1, sim2, sim3, sim4 = st.columns(4)
-    now_iso = datetime.now(timezone.utc).isoformat()
-    if sim1.button("🧪 + Simulate PII Leak Interception", use_container_width=True):
-        sample_raw = "Contact CTO at cto@fincore.io with token sk-proj-999888777666555444333222 and card 4532 1111 2222 3333"
-        scrubbed, cnt = redact_pii_and_secrets(sample_raw)
-        st.session_state["custom_alerts"].insert(0, {
-            "severity": "PII_SHIELD",
-            "badge": f"🔒 PII SHIELD ({cnt} MASKED)",
-            "color": "#a855f7",
-            "timestamp": now_iso,
-            "source_file": "simulated_meeting_notes.txt",
-            "story_id": "PRE-LLM-GATE",
-            "title": f"Zero-Trust PII Shield Masked {cnt} Sensitive Secrets Before OpenAI API Call",
-            "summary": f"Raw input contained Email, OpenAI Secret Key, and Credit Card PAN. Sanitized output: `{scrubbed}`",
-            "agent_node": "Agent 1: ingest_node -> redact_pii_and_secrets()",
-            "sha256": compute_sha256(sample_raw),
-            "remediation": "PII was automatically replaced with [REDACTED_EMAIL], [REDACTED_SECRET], and [REDACTED_PAN] prior to LLM tokenization.",
-            "payload": {"raw_snippet_redacted": scrubbed, "items_masked": cnt, "policy": "Zero-Trust Pre-LLM Scrubbing"},
-        })
-    if sim2.button("🧪 + Simulate Unsafe Hook Block", use_container_width=True):
-        st.session_state["custom_alerts"].insert(0, {
-            "severity": "HOOK_INTERCEPTOR",
-            "badge": "🛑 HOOK BLOCKED COMMAND",
-            "color": "#e11d48",
-            "timestamp": now_iso,
-            "source_file": "hooks.json",
-            "story_id": "HOOK-GATE-01",
-            "title": "PreToolUse Hook Blocked Destructive Command: `git push --force origin main`",
-            "summary": "Lifecycle hook `scripts/hooks/pre_tool_gate.py` returned exit code 2 (`decision: block`).",
-            "agent_node": "Lifecycle Hook: PreToolUse (scripts/hooks/pre_tool_gate.py)",
-            "sha256": "hook-policy-sha256-enforced",
-            "remediation": "Destructive shell and force-push operations are strictly prohibited by `.agents/plugins/fde-backlog-kit/hooks.json`.",
-            "payload": {"decision": "block", "blocked_command": "git push --force origin main", "hook_script": "scripts/hooks/pre_tool_gate.py"},
-        })
-    if sim3.button("🧪 + Simulate OpenAI 429 Retry", use_container_width=True):
-        st.session_state["custom_alerts"].insert(0, {
-            "severity": "HITL_REVIEW_GATE",
-            "badge": "⚠️ API RATE-LIMIT RETRY",
-            "color": "#d97706",
-            "timestamp": now_iso,
-            "source_file": "03_pci_compliance_spec.pdf",
-            "story_id": "HTTP-429",
-            "title": "OpenAI HTTP 429 Rate Limit Recovered via Exponential Backoff (Attempt 2/3)",
-            "summary": "Transient rate limit on `extractor_agent` resolved automatically after 1.5s backoff delay.",
-            "agent_node": "Agent 2: extractor_agent (LangChain Retry Wrapper)",
-            "sha256": latest.metadata.document_sha256,
-            "remediation": "Automatic exponential backoff succeeded on retry #2. Consider increasing TPM quota if frequency rises.",
-            "payload": {"http_status": 429, "retry_attempt": 2, "backoff_ms": 1500, "status": "RECOVERED"},
-        })
-    if sim4.button("🧹 Reset Simulated Events", use_container_width=True):
-        st.session_state["custom_alerts"] = []
-
-    all_events = build_unified_events(cfg, latest, history)
-
-    cnt_crit = sum(1 for e in all_events if e["severity"] in {"CRITICAL_CONFLICT", "HOOK_INTERCEPTOR"})
-    cnt_dup = sum(1 for e in all_events if e["severity"] == "DUPLICATE_BLOCKED")
-    cnt_hitl = sum(1 for e in all_events if e["severity"] == "HITL_REVIEW_GATE")
-    cnt_pii = sum(1 for e in all_events if e["severity"] == "PII_SHIELD")
-    cnt_ok = sum(1 for e in all_events if e["severity"] == "PIPELINE_AUDIT_LOG")
-
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("🚨 Critical / Conflicts", cnt_crit)
-    m2.metric("🛑 Duplicates Blocked", cnt_dup)
-    m3.metric("⚠️ HITL Review Gates", cnt_hitl)
-    m4.metric("🔒 PII Shield Events", cnt_pii)
-    m5.metric("✅ Healthy Audit Logs", cnt_ok)
-
-    f_col1, f_col2, f_col3 = st.columns([2.2, 2.2, 1.6])
-    with f_col1:
-        search_query = st.text_input(
-            "🔍 Search Events (by keyword, Story ID, FIN-104, filename, or SHA-256):",
-            placeholder="e.g. CONFLICT, FIN-104, 3DES, STORY-001, PII...",
-        ).strip().lower()
-    with f_col2:
-        all_severities = [
-            "CRITICAL_CONFLICT",
-            "DUPLICATE_BLOCKED",
-            "HITL_REVIEW_GATE",
-            "PII_SHIELD",
-            "HOOK_INTERCEPTOR",
-            "PIPELINE_AUDIT_LOG",
-        ]
-        selected_severities = st.multiselect(
-            "🎚️ Filter by Event Type / Severity:",
-            options=all_severities,
-            default=all_severities,
+    c_tog, c_exp = st.columns([2.2, 1.0])
+    with c_tog:
+        include_offline = st.checkbox(
+            "Include offline deterministic replay logs (test/cache runs)",
+            value=False,
+            key="logs_include_offline",
         )
-    with f_col3:
-        doc_options = ["All Documents"] + sorted({e["source_file"] for e in all_events})
-        selected_doc = st.selectbox("📂 Filter by Document:", options=doc_options)
+    all_events = build_unified_events(cfg, latest, history, include_offline=include_offline)
 
-    filtered_events = []
+    with c_exp:
+        st.download_button(
+            "⬇️ Export Filtered Logs (JSON)",
+            data=json.dumps(all_events, indent=2, default=str),
+            file_name="fde_audit_events.json",
+            mime="application/json",
+            width="stretch",
+            key="logs_export_btn",
+        )
+
+    cnt_err = sum(1 for e in all_events if e["category"] == "Errors & Conflicts")
+    cnt_pii = sum(1 for e in all_events if e["category"] == "Security & PII")
+    cnt_hitl = sum(1 for e in all_events if e["category"] == "HITL & Task Actions")
+    cnt_ok = sum(1 for e in all_events if e["category"] == "Healthy Runs")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Audited Events", len(all_events), "Live & Task Telemetry" if not include_offline else "All Logs")
+    m2.metric("Errors & Conflicts", cnt_err)
+    m3.metric("PII Shield Events", cnt_pii)
+    m4.metric("HITL & Task Actions", cnt_hitl)
+
+    f1, f2, f3 = st.columns([2.0, 1.5, 1.3])
+    with f1:
+        q = st.text_input(
+            "🔍 Search logs",
+            placeholder="Search by ticket ID (FIN-104), filename, SHA-256, or keyword...",
+            key="logs_search",
+        ).strip().lower()
+    with f2:
+        cats = ["Errors & Conflicts", "Security & PII", "HITL & Task Actions", "Healthy Runs"]
+        sel_cats = st.multiselect("Filter Category", cats, default=cats, key="logs_cats")
+    with f3:
+        sources = ["All Sources"] + sorted({e["source_file"] for e in all_events if e["source_file"]})
+        sel_src = st.selectbox("Source", sources, key="logs_src")
+
+    filtered = []
     for ev in all_events:
-        if ev["severity"] not in selected_severities:
+        if ev["category"] not in sel_cats:
             continue
-        if selected_doc != "All Documents" and ev["source_file"] != selected_doc:
+        if sel_src != "All Sources" and ev["source_file"] != sel_src:
             continue
-        if search_query:
-            haystack = json.dumps(ev, default=str).lower()
-            if search_query not in haystack:
-                continue
-        filtered_events.append(ev)
+        if q and q not in json.dumps(ev, default=str).lower():
+            continue
+        filtered.append(ev)
 
-    st.markdown(f"**Showing `{len(filtered_events)}` of `{len(all_events)}` total events** *(Click any row below to open full diagnostic details)*:")
+    if not filtered:
+        st.info("No real production audit events match your current filters. Run a document analysis or task action to see live logs here.")
+        return
 
-    if not filtered_events:
-        st.info("No events match your current search/filter criteria.")
+    st.caption(f"Showing **{len(filtered)}** event(s) — click any row to open full trace & payload.")
+    logs_json = json.dumps(filtered[:150], ensure_ascii=False, default=str).replace("</", "<\\/")
+    logs_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: transparent; color: #e2e8f0; }}
+  .wrap {{ border: 1px solid #2b2b2b; border-radius: 12px; overflow: hidden; background: #121212; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  thead th {{
+    text-align: left; padding: 10px 14px; background: #18181b; color: #94a3b8;
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #2b2b2b;
+  }}
+  tbody tr {{ border-bottom: 1px solid #222; cursor: pointer; transition: background 0.12s ease; }}
+  tbody tr:hover {{ background: #1e293b; }}
+  tbody td {{ padding: 10px 14px; vertical-align: middle; }}
+  .badge {{ padding: 3px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; display: inline-block; }}
+  .b-err {{ background: rgba(239,68,68,0.18); color: #f87171; border: 1px solid rgba(239,68,68,0.35); }}
+  .b-pii {{ background: rgba(59,130,246,0.18); color: #60a5fa; border: 1px solid rgba(59,130,246,0.35); }}
+  .b-hitl {{ background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); }}
+  .b-ok {{ background: rgba(16,163,127,0.18); color: #34d399; border: 1px solid rgba(16,163,127,0.35); }}
+  .modal-bg {{
+    display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.78);
+    backdrop-filter: blur(4px); padding: 14px; overflow-y: auto; align-items: flex-start; justify-content: center;
+  }}
+  .modal-bg.open {{ display: flex; }}
+  .modal {{
+    width: 100%; max-width: 900px; background: #141414; border: 1px solid #2e2e32;
+    border-radius: 14px; overflow: hidden; margin: auto 0; box-shadow: 0 20px 50px rgba(0,0,0,0.65);
+  }}
+  .mhdr {{
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 12px 16px; background: #1a1a1d; border-bottom: 1px solid #2b2b2b;
+  }}
+  .btn {{ background: #27272a; color: #e2e8f0; border: 1px solid #3f3f46; border-radius: 8px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; }}
+  .btn-close {{ background: #991b1b; border-color: #ef4444; color: #fff; }}
+  .mbody {{ padding: 14px 16px; max-height: 75vh; overflow-y: auto; }}
+  .grid-2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 10px; }}
+  .box {{ background: #18181b; border: 1px solid #2b2b2b; border-radius: 10px; padding: 12px; font-size: 12.5px; }}
+  .pre {{
+    background: #0f0f12; border: 1px solid #26262a; border-radius: 8px; padding: 10px; margin-top: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #cbd5e1;
+    white-space: pre-wrap; max-height: 220px; overflow-y: auto;
+  }}
+  .span-pill {{ background: #27272a; color: #93c5fd; padding: 2px 8px; border-radius: 6px; font-size: 11.5px; margin-right: 4px; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Timestamp (UTC)</th>
+        <th>Type</th>
+        <th>Source</th>
+        <th>Event Summary</th>
+        <th>Latency</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="logRows"></tbody>
+  </table>
+</div>
 
-    for idx, ev in enumerate(filtered_events):
-        header_label = f"{ev['badge']}  |  📄 {ev['source_file']}  |  {ev['title']}  ({ev['timestamp'][:19].replace('T', ' ')} UTC)"
-        with st.expander(header_label, expanded=(idx < 2)):
-            d1, d2 = st.columns([1.4, 1.0])
-            with d1:
-                st.markdown(
-                    f"""
-                    <div style="background:#141414; border-left:4px solid {ev['color']}; padding:12px 14px; border-radius:10px; margin-bottom:10px;">
-                        <div style="font-size:0.74rem; font-weight:700; color:{ev['color']}; text-transform:uppercase;">1. What Happened (Plain-English Diagnostic)</div>
-                        <div style="font-size:0.88rem; margin-top:4px; color:#e3e3e3;">{html.escape(ev['summary'])}</div>
-                    </div>
-                    <div style="background:#141414; border-left:4px solid #10a37f; padding:12px 14px; border-radius:10px;">
-                        <div style="font-size:0.74rem; font-weight:700; color:#10a37f; text-transform:uppercase;">2. Recommended FDE Action / Remediation</div>
-                        <div style="font-size:0.85rem; margin-top:4px; white-space:pre-line; color:#cbd5e1;">{html.escape(ev['remediation'])}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            with d2:
-                st.markdown(
-                    f"""
-                    <div style="background:#141414; border:1px solid #2a2a2a; padding:12px 14px; border-radius:10px;">
-                        <div style="font-size:0.74rem; font-weight:700; color:#93c5fd; text-transform:uppercase; margin-bottom:6px;">3. Technical Metadata &amp; Provenance</div>
-                        <div style="font-size:0.82rem; line-height:1.65; color:#cbd5e1;">
-                            • <strong>Event Severity:</strong> <code>{ev['severity']}</code><br>
-                            • <strong>Triggering Node:</strong> <code>{html.escape(ev['agent_node'])}</code><br>
-                            • <strong>Source Document:</strong> <code>{html.escape(ev['source_file'])}</code><br>
-                            • <strong>Affected Ticket:</strong> <code>{html.escape(ev['story_id'])}</code><br>
-                            • <strong>SHA-256 Hash:</strong> <code>{html.escape(ev['sha256'][:20])}...</code><br>
-                            • <strong>Timestamp (UTC):</strong> <code>{html.escape(ev['timestamp'])}</code>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            st.caption("📦 **Raw Structured Event / Audit JSON Payload:**")
-            st.json(ev["payload"], expanded=False)
+<div id="logModal" class="modal-bg" onclick="if(event.target===this) closeLog()">
+  <div class="modal">
+    <div class="mhdr">
+      <div id="lTitle" style="font-weight:700;font-size:15px;color:#fff;"></div>
+      <button class="btn btn-close" onclick="closeLog()">✕ Close</button>
+    </div>
+    <div class="mbody" id="lBody"></div>
+  </div>
+</div>
+
+<script>
+const LOGS = {logs_json};
+function esc(s) {{ return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }}
+function badgeClass(sev) {{
+  if (sev === "ERROR_CONFLICT") return "b-err";
+  if (sev === "PII_SHIELD") return "b-pii";
+  if (sev === "HITL_GATE" || sev === "TASK_ACTION") return "b-hitl";
+  return "b-ok";
+}}
+document.getElementById("logRows").innerHTML = LOGS.map((e, i) => `
+  <tr onclick="openLog(${{i}})">
+    <td style="color:#94a3b8;white-space:nowrap;">${{esc((e.timestamp || "").slice(0,19).replace("T"," "))}}</td>
+    <td><span class="badge ${{badgeClass(e.severity)}}">${{esc(e.badge)}}</span></td>
+    <td><code>${{esc(e.source_file)}}</code></td>
+    <td><strong>${{esc(e.title)}}</strong><div style="font-size:12px;color:#94a3b8;margin-top:2px;">${{esc(e.summary)}}</div></td>
+    <td style="white-space:nowrap;">${{e.latency_ms ? e.latency_ms + " ms" : "—"}}</td>
+    <td style="color:#60a5fa;font-weight:600;white-space:nowrap;">Inspect →</td>
+  </tr>
+`).join("");
+
+function openLog(i) {{
+  const e = LOGS[i];
+  document.getElementById("lTitle").innerHTML = `<span class="badge ${{badgeClass(e.severity)}}" style="margin-right:8px;">${{esc(e.badge)}}</span> ${{esc(e.title)}}`;
+  const traceHtml = (e.trace && e.trace.length)
+    ? e.trace.map(t => `<span class="span-pill">${{esc(t)}}</span>`).join(" → ")
+    : "Direct event";
+  document.getElementById("lBody").innerHTML = `
+    <div class="grid-2">
+      <div class="box">
+        <strong>1. Diagnostic Summary</strong>
+        <div style="margin-top:6px;color:#cbd5e1;line-height:1.5;">${{esc(e.summary)}}</div>
+        <div style="margin-top:10px;"><strong>2. Recommended FDE Action</strong></div>
+        <div style="margin-top:4px;color:#6ee7b7;white-space:pre-line;">${{esc(e.remediation)}}</div>
+      </div>
+      <div class="box">
+        <strong>3. Provenance & Execution Trace</strong>
+        <div style="margin-top:6px;line-height:1.7;color:#cbd5e1;">
+          • <strong>Node:</strong> <code>${{esc(e.agent_node)}}</code><br>
+          • <strong>Source:</strong> <code>${{esc(e.source_file)}}</code><br>
+          • <strong>Ticket / Scope:</strong> <code>${{esc(e.ticket_id)}}</code><br>
+          • <strong>SHA-256:</strong> <code>${{esc(e.sha256 || "—")}}</code><br>
+          • <strong>Timestamp:</strong> <code>${{esc(e.timestamp)}}</code>
+        </div>
+        <div style="margin-top:8px;">${{traceHtml}}</div>
+      </div>
+    </div>
+    <div style="margin-top:12px;font-weight:600;font-size:12.5px;">📦 Raw Audit Payload (JSON)</div>
+    <div class="pre">${{esc(JSON.stringify(e.payload, null, 2))}}</div>
+  `;
+  document.getElementById("logModal").classList.add("open");
+}}
+function closeLog() {{ document.getElementById("logModal").classList.remove("open"); }}
+document.addEventListener("keydown", e => {{ if (e.key === "Escape") closeLog(); }});
+</script>
+</body>
+</html>"""
+    components.html(logs_html, height=560, scrolling=True)
 
 
 def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool]:
