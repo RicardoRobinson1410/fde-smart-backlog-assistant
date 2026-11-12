@@ -3281,7 +3281,13 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 unsafe_allow_html=True,
             )
 
-    st.markdown("#### 📡 Real-Time Cost & Token Monitor (Live Telemetry)")
+    st.markdown("#### 📡 Real-Time Cost, Budgeting & Token Alerts")
+    b_col1, b_col2 = st.columns(2)
+    with b_col1:
+        budget_limit = st.number_input("💵 Live Budget Limit ($ USD):", min_value=0.50, max_value=500.0, value=5.00, step=0.50)
+    with b_col2:
+        token_threshold = st.number_input("🚨 Per-Execution Token Alert Threshold:", min_value=200, max_value=50000, value=1800, step=100)
+
     finops_port = int(_CHAT_SERVER_STATE.get("port") or 8765)
     live_monitor_html = f"""
     <!DOCTYPE html>
@@ -3296,10 +3302,15 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         .sub {{ font-size:11px; color:#8e8e8e; margin-top:3px; }}
         .live-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:#10a37f; margin-right:6px; animation:pulse 1.5s infinite; }}
         @keyframes pulse {{ 0%,100%{{opacity:1;}} 50%{{opacity:.35;}} }}
+        .budget-box {{ background:#141414; border:1px solid #2a2a2a; border-radius:10px; padding:10px 14px; margin-bottom:10px; }}
+        .bar-bg {{ background:#222; border-radius:6px; height:10px; width:100%; margin-top:6px; overflow:hidden; }}
+        .bar-fill {{ height:100%; background:#10a37f; transition:width .3s ease; }}
+        .alert-box {{ background:#2b1116; border:1px solid #e11d48; color:#fda4af; border-radius:10px; padding:9px 12px; font-size:12px; margin-bottom:10px; display:none; }}
         table {{ width:100%; border-collapse:collapse; background:#141414; border:1px solid #2a2a2a; border-radius:10px; overflow:hidden; font-size:12px; }}
         th, td {{ padding:8px 10px; text-align:left; border-bottom:1px solid #222; }}
         th {{ color:#9ca3af; font-size:11px; text-transform:uppercase; background:#101010; }}
         code {{ color:#93c5fd; font-family:monospace; }}
+        .tok-warn {{ background:#3b1620; color:#fda4af; border:1px solid #e11d48; padding:2px 6px; border-radius:5px; font-size:10.5px; font-weight:700; margin-left:6px; }}
       </style>
     </head>
     <body>
@@ -3326,14 +3337,24 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         <div class="kpi">
           <div class="lbl">Logged Audit Events</div>
           <div class="val" id="k-evt">0</div>
-          <div class="sub">Zero synthetic predictions</div>
+          <div class="sub" id="k-alerts">0 high-token alerts</div>
         </div>
       </div>
+      <div class="budget-box">
+        <div style="display:flex; justify-content:space-between; font-size:12px;">
+          <span><strong>💵 Budget Utilization</strong> (Limit: <code>${budget_limit:.2f}</code>)</span>
+          <span id="budget-lbl" style="color:#6ee7b7; font-weight:700;">$0.00000 / ${budget_limit:.2f} (0.0%)</span>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" id="budget-bar" style="width:0%;"></div></div>
+      </div>
+      <div class="alert-box" id="token-alert-banner"></div>
       <table>
         <thead><tr><th>Timestamp (UTC)</th><th>Document / Event</th><th>Scope / Ticket</th><th>Mode</th><th>Tokens</th><th>Actual Cost (USD)</th></tr></thead>
         <tbody id="finops-rows"><tr><td colspan="6" style="color:#8e8e8e;">Loading live telemetry...</td></tr></tbody>
       </table>
       <script>
+        const BUDGET_LIMIT = {budget_limit:.4f};
+        const TOKEN_THRESHOLD = {int(token_threshold)};
         async function pollFinops() {{
           try {{
             const resp = await fetch('http://127.0.0.1:{finops_port}/api/finops');
@@ -3347,21 +3368,47 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             document.getElementById('k-naive').innerText = 'Naive gpt-4o equiv: $' + Number(d.naive_cost_usd || 0).toFixed(5);
             document.getElementById('k-evt').innerText = String(d.total_events || 0);
             document.getElementById('last-sync').innerText = 'Last updated: ' + new Date().toLocaleTimeString();
-            const tbody = document.getElementById('finops-rows');
+
+            const pct = Math.min(100, (actualCost / Math.max(0.01, BUDGET_LIMIT)) * 100);
+            const overBudget = actualCost > BUDGET_LIMIT;
+            const bBar = document.getElementById('budget-bar');
+            const bLbl = document.getElementById('budget-lbl');
+            bBar.style.width = pct.toFixed(1) + '%';
+            bBar.style.background = overBudget ? '#e11d48' : (pct > 80 ? '#f59e0b' : '#10a37f');
+            bLbl.style.color = overBudget ? '#fda4af' : '#6ee7b7';
+            bLbl.innerText = `$${{actualCost.toFixed(5)}} / $${{BUDGET_LIMIT.toFixed(2)}} (${{pct.toFixed(1)}}%)${{overBudget ? ' — 🚨 BUDGET EXCEEDED' : ''}}`;
+
             const rows = d.recent || [];
+            const highTokenRows = rows.filter(r => Number(r.tokens || 0) > TOKEN_THRESHOLD);
+            document.getElementById('k-alerts').innerText = `${{highTokenRows.length}} execution(s) > ${{TOKEN_THRESHOLD.toLocaleString()}} tok`;
+            const banner = document.getElementById('token-alert-banner');
+            if (highTokenRows.length > 0) {{
+              banner.style.display = 'block';
+              banner.innerHTML = `🚨 <strong>Token Threshold Alert (&gt;${{TOKEN_THRESHOLD.toLocaleString()}} tokens):</strong> ${{highTokenRows.length}} recent execution(s) exceeded limit — ` +
+                highTokenRows.slice(0, 3).map(r => `<code>${{r.label}}</code> (${{Number(r.tokens).toLocaleString()}} tok)`).join(', ');
+            }} else {{
+              banner.style.display = 'none';
+            }}
+
+            const tbody = document.getElementById('finops-rows');
             if (!rows.length) {{
               tbody.innerHTML = '<tr><td colspan="6" style="color:#8e8e8e;">No telemetry events logged yet.</td></tr>';
             }} else {{
-              tbody.innerHTML = rows.map(r => `
-                <tr>
-                  <td><code>${{r.timestamp || '-'}}</code></td>
-                  <td>${{r.label}}</td>
-                  <td><code>${{r.ticket}}</code></td>
-                  <td><code>${{r.mode || '-'}}</code></td>
-                  <td>${{Number(r.tokens || 0).toLocaleString()}}</td>
-                  <td style="color:#10a37f; font-weight:700;">$${{Number(r.cost || 0).toFixed(5)}}</td>
-                </tr>
-              `).join('');
+              tbody.innerHTML = rows.map(r => {{
+                const tok = Number(r.tokens || 0);
+                const isHigh = tok > TOKEN_THRESHOLD;
+                const badge = isHigh ? `<span class="tok-warn">🚨 &gt;${{TOKEN_THRESHOLD.toLocaleString()}}</span>` : '';
+                return `
+                  <tr style="${{isHigh ? 'background:rgba(225,29,72,0.08);' : ''}}">
+                    <td><code>${{r.timestamp || '-'}}</code></td>
+                    <td>${{r.label}}</td>
+                    <td><code>${{r.ticket}}</code></td>
+                    <td><code>${{r.mode || '-'}}</code></td>
+                    <td>${{tok.toLocaleString()}}${{badge}}</td>
+                    <td style="color:#10a37f; font-weight:700;">$${{Number(r.cost || 0).toFixed(5)}}</td>
+                  </tr>
+                `;
+              }}).join('');
             }}
           }} catch (e) {{}}
         }}
@@ -3371,7 +3418,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     </body>
     </html>
     """
-    components.html(live_monitor_html, height=430, scrolling=True)
+    components.html(live_monitor_html, height=500, scrolling=True)
 
 
 def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
