@@ -4221,76 +4221,104 @@ def build_unified_events(
     """Build real, audit-backed FDE observability events from outputs/audit_trail.jsonl and active session errors."""
     events: list[dict[str, Any]] = []
 
-    # 1. Surface any active run conflicts / HITL gates from the current session result
+    # 1. Surface active session conflicts / HITL gates (only if live, or if include_offline is enabled)
     if latest and latest.stories:
-        src_file = Path(latest.metadata.source_file).name
-        ts_val = datetime.now(timezone.utc).isoformat()
-        for s in latest.stories:
-            if s.backlog_alignment == BacklogAlignment.CONFLICT:
-                events.append({
-                    "severity": "ERROR_CONFLICT",
-                    "badge": "🚨 CONFLICT",
-                    "category": "Errors & Conflicts",
-                    "is_live": latest.metadata.execution_mode != "offline_deterministic_replay",
-                    "timestamp": ts_val,
-                    "source_file": src_file,
-                    "ticket_id": s.id,
-                    "title": f"Backlog Conflict: {s.id} ({s.title}) vs {', '.join(s.related_backlog_ids) or 'existing'}",
-                    "summary": s.alignment_notes or "Requirement contradicts an existing backlog specification.",
-                    "agent_node": f"backlog_auditor / security_reviewer ({cfg.subagent_models.security_reviewer})",
-                    "trace": latest.metadata.agent_trace or ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"],
-                    "sha256": latest.metadata.document_sha256,
-                    "latency_ms": latest.metadata.latency_ms,
-                    "remediation": (
-                        f"1. Hold {s.id} in HITL review before promoting to sprint.\n"
-                        f"2. Resolve architectural conflict with {', '.join(s.related_backlog_ids) or 'owner'}."
-                    ),
-                    "payload": s.model_dump(),
-                })
-            elif s.requires_human_approval:
-                events.append({
-                    "severity": "HITL_GATE",
-                    "badge": "⚠️ HITL GATE",
-                    "category": "HITL & Task Actions",
-                    "is_live": latest.metadata.execution_mode != "offline_deterministic_replay",
-                    "timestamp": ts_val,
-                    "source_file": src_file,
-                    "ticket_id": s.id,
-                    "title": f"Human Approval Required: {s.id} ({s.title})",
-                    "summary": f"{s.priority_rationale} (Confidence: {int(s.confidence_score * 100)}%)",
-                    "agent_node": f"security_reviewer ({cfg.subagent_models.security_reviewer})",
-                    "trace": latest.metadata.agent_trace or ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"],
-                    "sha256": latest.metadata.document_sha256,
-                    "latency_ms": latest.metadata.latency_ms,
-                    "remediation": f"Review acceptance criteria and approve {s.id} ({s.story_points} pts) in Kanban / Pipeline.",
-                    "payload": s.model_dump(),
-                })
+        latest_is_offline = latest.metadata.execution_mode == "offline_deterministic_replay"
+        if include_offline or not latest_is_offline:
+            src_file = Path(latest.metadata.source_file).name
+            ts_val = datetime.now(timezone.utc).isoformat()
+            for s in latest.stories:
+                if s.backlog_alignment == BacklogAlignment.CONFLICT:
+                    events.append({
+                        "severity": "ERROR_CONFLICT",
+                        "badge": "🚨 CONFLICT",
+                        "category": "Errors & Conflicts",
+                        "is_live": not latest_is_offline,
+                        "timestamp": ts_val,
+                        "source_file": src_file,
+                        "ticket_id": s.id,
+                        "title": f"Backlog Conflict: {s.id} ({s.title}) vs {', '.join(s.related_backlog_ids) or 'existing'}",
+                        "summary": s.alignment_notes or "Requirement contradicts an existing backlog specification.",
+                        "agent_node": f"backlog_auditor / security_reviewer ({cfg.subagent_models.security_reviewer})",
+                        "trace": latest.metadata.agent_trace or ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"],
+                        "sha256": latest.metadata.document_sha256,
+                        "latency_ms": latest.metadata.latency_ms,
+                        "remediation": (
+                            f"1. Hold {s.id} in HITL review before promoting to sprint.\n"
+                            f"2. Resolve architectural conflict with {', '.join(s.related_backlog_ids) or 'owner'}."
+                        ),
+                        "payload": s.model_dump(),
+                    })
+                elif s.requires_human_approval:
+                    events.append({
+                        "severity": "HITL_GATE",
+                        "badge": "⚠️ HITL GATE",
+                        "category": "HITL & Task Actions",
+                        "is_live": not latest_is_offline,
+                        "timestamp": ts_val,
+                        "source_file": src_file,
+                        "ticket_id": s.id,
+                        "title": f"Human Approval Required: {s.id} ({s.title})",
+                        "summary": f"{s.priority_rationale} (Confidence: {int(s.confidence_score * 100)}%)",
+                        "agent_node": f"security_reviewer ({cfg.subagent_models.security_reviewer})",
+                        "trace": latest.metadata.agent_trace or ["ingest_node", "extractor_agent", "backlog_auditor", "security_reviewer"],
+                        "sha256": latest.metadata.document_sha256,
+                        "latency_ms": latest.metadata.latency_ms,
+                        "remediation": f"Review acceptance criteria and approve {s.id} ({s.story_points} pts) in Kanban / Pipeline.",
+                        "payload": s.model_dump(),
+                    })
 
     # 2. Parse real immutable records from outputs/audit_trail.jsonl (newest first)
     for rec in history:
-        exec_mode = str(rec.get("execution_mode", ""))
-        event_type = str(rec.get("event_type", ""))
+        exec_mode = str(rec.get("execution_mode", "") or "")
+        event_type = str(rec.get("event_type", "") or "")
         is_offline = exec_mode == "offline_deterministic_replay"
         if is_offline and not include_offline:
             continue
 
-        ts_val = str(rec.get("timestamp_utc", ""))
+        ts_val = str(rec.get("timestamp_utc") or rec.get("timestamp") or "")
         pii_cnt = int(rec.get("pii_redacted_count", 0) or 0)
+        hitl_cnt = int(rec.get("hitl_approval_required_count", 0) or 0)
         err_msg = str(rec.get("error", "") or "")
 
-        if event_type == "task_action_audit":
-            action = str(rec.get("action", "task_action")).upper()
-            tid = str(rec.get("task_id", "TASK"))
-            hitl = bool(rec.get("requires_human_approval", False))
-            sev = "HITL_GATE" if hitl else "TASK_ACTION"
-            badge = "🛡️ HITL TASK" if hitl else f"📋 TASK {action}"
+        if event_type in {"task_create", "task_update", "task_delete"}:
+            item = rec.get("item") or {}
+            op = event_type.replace("task_", "").upper()
+            tid = str(rec.get("ticket_id") or item.get("id") or "TASK")
+            approved = bool(rec.get("approved_by_human", False))
+            sev = "HITL_GATE" if approved else "TASK_ACTION"
+            badge = f"🛡️ HITL {op}" if approved else f"📋 TASK {op}"
             cat = "HITL & Task Actions"
             src = "Kanban / Chat Agent"
-            title = f"{action} {tid}: {rec.get('title', 'Backlog update')}"
-            summary = f"Priority: {rec.get('priority', '—')} • Approved by human: {rec.get('approved_by_human', False)}"
+            title = f"{op} {tid}: {item.get('title', 'Backlog item')}"
+            summary = f"Priority: {item.get('priority', '—')} • Status: {item.get('status', '—')} • Human-approved: {approved}"
             node = "Task Action Executor (HITL Policy Gate)"
-            remediation = "Verified and persisted to data/existing_backlog.json."
+            remediation = "Persisted to data/existing_backlog.json."
             trace = ["intent_router", "risk_policy_gate", "backlog_store"]
+        elif event_type == "task_action_rejected":
+            act = rec.get("action") or {}
+            op = str(act.get("op", "action")).upper()
+            tid = str(act.get("id") or "NEW")
+            sev = "HITL_GATE"
+            badge = "🛑 HITL REJECTED"
+            cat = "HITL & Task Actions"
+            src = "Kanban / Chat Agent"
+            title = f"Rejected {op} ({tid}): {act.get('title', 'Task proposal')}"
+            summary = "Human reviewer declined the proposed backlog change at the HITL gate."
+            node = "HITL Approval Gate"
+            remediation = "No changes were written to data/existing_backlog.json."
+            trace = ["intent_router", "hitl_gate_rejected"]
+        elif event_type == "live_chat_turn":
+            sev = "AUDIT_OK"
+            badge = "💬 LIVE CHAT"
+            cat = "Healthy Runs"
+            src = "Chat Assistant"
+            tid = f"{rec.get('stories_generated', 0)} items"
+            title = str(rec.get("source_file", "Chat turn"))
+            summary = f"Tokens: {rec.get('estimated_tokens', 0):,} • Cost: ${float(rec.get('estimated_cost_usd', 0.0)):.5f}"
+            node = "Conversational Backlog Assistant"
+            remediation = "No action required."
+            trace = ["chat_router", "openai_completion"]
         elif err_msg:
             sev = "ERROR_CONFLICT"
             badge = "❌ ERROR"
@@ -4313,6 +4341,17 @@ def build_unified_events(
             node = "ingest_node -> redact_pii_and_secrets()"
             remediation = "Sensitive tokens were masked locally prior to LLM invocation."
             trace = list(rec.get("agent_trace", []))
+        elif hitl_cnt > 0:
+            sev = "HITL_GATE"
+            badge = f"⚠️ HITL ({hitl_cnt} FLAGGED)"
+            cat = "HITL & Task Actions"
+            src = Path(str(rec.get("source_file", "unknown"))).name
+            tid = f"{hitl_cnt} story(ies)"
+            title = f"HITL Review Triggered on {src} ({hitl_cnt} flagged)"
+            summary = f"Mode: {exec_mode} • Model: {rec.get('model_name')} • Cost: ${float(rec.get('estimated_cost_usd', 0.0)):.5f}"
+            node = "security_reviewer"
+            remediation = "High-risk (P0 / CONFLICT) items flagged for human sign-off."
+            trace = list(rec.get("agent_trace", []))
         else:
             sev = "AUDIT_OK"
             badge = "✅ LIVE RUN" if not is_offline else "🧪 OFFLINE"
@@ -4321,7 +4360,7 @@ def build_unified_events(
             tid = f"{rec.get('stories_generated', 0)} stories"
             title = f"Audited Run on {src} ({rec.get('latency_ms', 0)} ms)"
             summary = (
-                f"Mode: {exec_mode} • Model: {rec.get('model_name')} • "
+                f"Mode: {exec_mode or 'live'} • Model: {rec.get('model_name', 'gpt-4o-mini')} • "
                 f"Tokens: {rec.get('estimated_tokens', 0):,} • Cost: ${float(rec.get('estimated_cost_usd', 0.0)):.5f}"
             )
             node = "LangGraph 4-Node StateGraph"
@@ -4346,8 +4385,9 @@ def build_unified_events(
             "payload": rec,
         })
 
+    # Sort newest first by timestamp so task/chat/pipeline events appear in true chronological order
+    events.sort(key=lambda e: str(e.get("timestamp", "")), reverse=True)
     return events
-
 
 def render_searchable_error_and_log_portal(
     cfg: ScenarioConfig,
