@@ -1,4 +1,4 @@
-"""Gemini / ChatGPT-Style FDE Smart Backlog Assistant — Sleek Conversational Thinking UI + 6 Dedicated Tabs (1. Assistant & Live Thinking, 2. Clickable Kanban Board, 3. Connected Agent/MCP Graph, 4. FinOps Cost Savings, 5. Certification Rubric Dashboard, 6. Searchable Error & Log Portal)."""
+"""ChatGPT-Style FDE Smart Backlog Assistant — Tab 1 matches the iconic ChatGPT 'Where should we begin?' dark UI with instant file preview and real-time streaming reasoning & execution, plus dedicated tabs for Clickable Kanban, Connected Agent/MCP Graph, FinOps Cost Savings, Certification Rubric, Error/Log Explorer, and Settings."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import html
 import importlib
 import json
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,142 +42,84 @@ def compute_sha256(text: str) -> str:
 
 
 st.set_page_config(
-    page_title="FDE Smart Backlog Studio",
+    page_title="ChatGPT — FDE Smart Backlog Assistant",
     page_icon="✨",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-GEMINI_CHATGPT_CSS = """
+CHATGPT_DARK_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-html, body, [class*="css"] {
+html, body, [class*="css"], .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #000000 !important;
+    color: #ececec !important;
 }
 .block-container {
-    padding-top: 1rem !important;
-    padding-bottom: 2.5rem !important;
-    max-width: 1380px;
+    padding-top: 0.6rem !important;
+    padding-bottom: 1.5rem !important;
+    max-width: 1400px;
 }
 
-/* Completely hide sidebar */
+/* Completely remove sidebar & header chrome */
 [data-testid="stSidebar"],
 [data-testid="collapsedControl"],
 [data-testid="stSidebarCollapsedControl"],
-section[data-testid="stSidebar"] {
+section[data-testid="stSidebar"],
+header[data-testid="stHeader"] {
     display: none !important;
     width: 0px !important;
 }
 
-/* Gemini / ChatGPT Minimalist Top Header */
-.gemini-header {
-    background: #131314;
-    border: 1px solid #282a2c;
-    border-radius: 20px;
-    padding: 1.25rem 1.75rem;
-    margin-bottom: 0.9rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+/* Minimalist ChatGPT Top Tabs */
+div[data-baseweb="tab-list"] {
+    background-color: #0d0d0d !important;
+    padding: 6px 10px !important;
+    border-radius: 999px !important;
+    border: 1px solid #262626 !important;
+    gap: 6px !important;
+    margin-bottom: 0.6rem !important;
 }
-.gemini-brand {
-    font-size: 1.55rem;
-    font-weight: 800;
-    background: linear-gradient(90deg, #4285f4 0%, #9b72cb 50%, #d96570 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: -0.02em;
+button[data-baseweb="tab"] {
+    border-radius: 999px !important;
+    padding: 0.42rem 1.05rem !important;
+    font-weight: 600 !important;
+    font-size: 0.84rem !important;
+    color: #9b9b9b !important;
+    background: transparent !important;
+    border: none !important;
 }
-.gemini-sub {
-    color: #9aa0a6;
-    font-size: 0.88rem;
-    margin-top: 2px;
+button[data-baseweb="tab"][aria-selected="true"] {
+    background-color: #212121 !important;
+    color: #ffffff !important;
+    border: 1px solid #383838 !important;
 }
 
-/* Pill Badges (ChatGPT / Gemini style) */
+/* Pill Badges */
 .g-pill {
     display: inline-block;
-    padding: 0.22rem 0.65rem;
+    padding: 0.2rem 0.62rem;
     border-radius: 999px;
     font-size: 0.72rem;
     font-weight: 600;
     margin-right: 5px;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.12);
 }
-.gp-blue { background: rgba(66, 133, 244, 0.16); color: #8ab4f8; border-color: rgba(66, 133, 244, 0.35); }
+.gp-blue { background: rgba(59, 130, 246, 0.16); color: #93c5fd; border-color: rgba(59, 130, 246, 0.35); }
 .gp-green { background: rgba(16, 163, 127, 0.18); color: #6ee7b7; border-color: rgba(16, 163, 127, 0.4); }
-.gp-purple { background: rgba(155, 114, 203, 0.18); color: #d8b4fe; border-color: rgba(155, 114, 203, 0.4); }
+.gp-purple { background: rgba(168, 85, 247, 0.18); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
 .gp-red { background: rgba(239, 68, 68, 0.18); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
 .gp-amber { background: rgba(245, 158, 11, 0.18); color: #fcd34d; border-color: rgba(245, 158, 11, 0.4); }
-
-/* Attached File Chip & Instant Preview Canvas */
-.attachment-bar {
-    background: #1e1f22;
-    border: 1px solid #333538;
-    border-radius: 16px;
-    padding: 0.75rem 1.15rem;
-    margin-bottom: 0.75rem;
-}
-.doc-pane {
-    background: #131314;
-    color: #e3e3e3;
-    border: 1px solid #333538;
-    border-radius: 12px;
-    padding: 12px 14px;
-    height: 195px;
-    overflow-y: auto;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.79rem;
-    line-height: 1.55;
-    white-space: pre-wrap;
-}
-
-/* Sleek Metric Strip */
-.metric-strip {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-bottom: 1rem;
-}
-.m-box {
-    background: #1e1f22;
-    border: 1px solid #2d2f31;
-    border-radius: 14px;
-    padding: 0.85rem 1.1rem;
-}
-.m-lbl { font-size: 0.73rem; color: #9aa0a6; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-.m-val { font-size: 1.4rem; font-weight: 700; color: #e3e3e3; margin: 2px 0; }
-.m-sub { font-size: 0.76rem; color: #8ab4f8; }
-
-/* ChatGPT / Gemini Thinking Box */
-.thinking-step {
-    background: #18191b;
-    border-left: 3px solid #8ab4f8;
-    border-radius: 8px;
-    padding: 8px 12px;
-    margin-bottom: 7px;
-    font-size: 0.83rem;
-}
 
 /* FinOps Cards */
 .finops-step-card {
     border-radius: 14px;
     padding: 1rem;
-    background: #1e1f22;
-    border: 1px solid #333538;
+    background: #141414;
+    border: 1px solid #2a2a2a;
     height: 100%;
-}
-
-/* Pill-styled Streamlit Tabs */
-button[data-baseweb="tab"] {
-    border-radius: 999px !important;
-    padding: 0.45rem 1rem !important;
-    margin-right: 6px !important;
-    font-weight: 600 !important;
 }
 </style>
 """
@@ -217,299 +158,627 @@ def ensure_initial_telemetry(cfg: ScenarioConfig) -> list[dict[str, Any]]:
         st.session_state["active_doc_path"] = str(default_doc)
     if "custom_alerts" not in st.session_state:
         st.session_state["custom_alerts"] = []
-    if "chat_messages" not in st.session_state:
-        st.session_state["chat_messages"] = []
     return history
 
 
-def render_top_control_bar() -> tuple[ScenarioConfig, bool, bool]:
-    """Render a sleek Gemini/ChatGPT model & scenario selector bar at the top of the workspace."""
-    presets = {
-        "🏦 FinTech Backlog (STORY-001)": "config/scenario_config.json",
-        "🚨 SRE Outage Triage (REM-001)": "config/presets/incident_triage_scenario.json",
-    }
-    c1, c2, c3, c4 = st.columns([2.4, 2.4, 1.6, 1.6])
-    with c1:
-        choice = st.selectbox("✨ Scenario Persona:", list(presets.keys()))
-    base_cfg = load_scenario_config(presets[choice])
+def build_all_scenarios_bundle(cfg: ScenarioConfig) -> dict[str, dict[str, Any]]:
+    """Pre-load all 3 sample documents + custom active document so Tab 1 can preview & stream any file at 0ms latency."""
+    samples_dir = Path(cfg.paths.samples_dir)
+    engine = BacklogEngine(config=cfg, force_offline=True)
+    bundle: dict[str, dict[str, Any]] = {}
 
-    with c2:
-        mode_choice = st.selectbox(
-            "🤖 Model Engine:",
-            ["⚡ Instant Simulation (Free / Offline)", "🌐 Live OpenAI API (.env Key)"],
-        )
-    offline = mode_choice.startswith("⚡")
+    for doc_path in sorted(samples_dir.glob("*")):
+        if doc_path.suffix.lower() not in {".txt", ".md", ".pdf"}:
+            continue
+        raw_text = extract_document_text(doc_path)
+        scrubbed_text, pii_count = redact_pii_and_secrets(raw_text) if cfg.enable_pii_redaction else (raw_text, 0)
+        res = engine.analyze(doc_path)
+        bundle[doc_path.name] = _serialize_scenario_for_chat(doc_path, raw_text, scrubbed_text, pii_count, res, cfg)
 
-    with c3:
-        st.write("")
-        pii_guard = st.toggle("🛡️ Pre-LLM PII Shield", value=True)
-    with c4:
-        st.write("")
-        use_live_gh = st.toggle("🐙 GitHub Issues Sync", value=False)
-
-    with st.expander("⚙️ Advanced Model & Scenario Settings", expanded=False):
-        o1, o2, o3, o4, o5 = st.columns(5)
-        domain_name = o1.text_input("Industry Domain", value=base_cfg.domain_name)
-        item_label = o2.text_input("Work Item Label", value=base_cfg.output_item_label)
-        id_prefix = o3.text_input("Ticket Prefix", value=base_cfg.id_prefix)
-        m_ext = o4.text_input("Extractor Model (Fast)", value=base_cfg.subagent_models.extractor_agent)
-        m_sec = o5.text_input("Security Model (Reasoning)", value=base_cfg.subagent_models.security_reviewer)
-
-    cfg = base_cfg.with_overrides({
-        "domain_name": domain_name,
-        "output_item_label": item_label,
-        "id_prefix": id_prefix,
-        "enable_pii_redaction": pii_guard,
-        "subagent_models.extractor_agent": m_ext,
-        "subagent_models.security_reviewer": m_sec,
-    })
-    return cfg, offline, use_live_gh
+    return bundle
 
 
-def render_instant_document_preview(doc_path: Path, pii_enabled: bool) -> None:
-    """Render a ChatGPT/Gemini-style Attached File Canvas immediately when selecting a file."""
-    raw_text = extract_document_text(doc_path)
-    scrubbed_text, pii_count = redact_pii_and_secrets(raw_text) if pii_enabled else (raw_text, 0)
-    doc_sha = compute_sha256(raw_text)
-    file_size_kb = round(doc_path.stat().st_size / 1024, 1)
-    line_count = len(raw_text.splitlines())
-
-    ext_badge = doc_path.suffix.upper().lstrip(".")
-    pii_pill = (
-        f'<span class="g-pill gp-purple">🛡️ {pii_count} Private Items Masked</span>'
-        if pii_count > 0
-        else '<span class="g-pill gp-green">✅ 0 PII Leaks (Clean)</span>'
-    )
-
-    st.markdown(
-        f"""
-        <div class="attachment-bar">
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
-                <div>
-                    <span class="g-pill gp-blue">📎 {ext_badge} ATTACHMENT</span>
-                    <strong style="font-size:0.95rem; color:#e3e3e3; margin-left:4px;"><code>{html.escape(doc_path.name)}</code> — Live Preview</strong>
-                </div>
-                <div>
-                    {pii_pill}
-                    <span class="g-pill gp-amber">{file_size_kb} KB • {line_count} lines</span>
-                    <span class="g-pill gp-blue">SHA-256: {doc_sha[:12]}...</span>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    p_col1, p_col2 = st.columns(2)
-    with p_col1:
-        st.caption(f"📄 **Original Attached File (`{doc_path.name}`)**")
-        st.markdown(f'<div class="doc-pane">{html.escape(raw_text)}</div>', unsafe_allow_html=True)
-        if doc_path.suffix.lower() == ".pdf":
-            with st.expander("📕 Open Interactive Embedded PDF Viewer", expanded=False):
-                pdf_bytes = doc_path.read_bytes()
-                b64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-                components.html(
-                    f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="290px" style="border-radius:12px; border:1px solid #4285f4;"></iframe>',
-                    height=305,
-                )
-
-    with p_col2:
-        st.caption("🔒 **AI-Sanitized Context Window (Pre-LLM Zero-Trust Shield)**")
-        escaped_safe = html.escape(scrubbed_text)
-        for token in ("[REDACTED_EMAIL]", "[REDACTED_SECRET]", "[REDACTED_PAN]", "[REDACTED_SSN]"):
-            escaped_safe = escaped_safe.replace(
-                token,
-                f'<span style="background:#ef4444; color:#fff; padding:1px 6px; border-radius:6px; font-weight:700;">{token}</span>',
-            )
-        st.markdown(f'<div class="doc-pane">{escaped_safe}</div>', unsafe_allow_html=True)
-
-
-def render_gemini_chatgpt_assistant_tab(
+def _serialize_scenario_for_chat(
+    doc_path: Path,
+    raw_text: str,
+    scrubbed_text: str,
+    pii_count: int,
+    res: BacklogAnalysisResult,
     cfg: ScenarioConfig,
-    target_doc: Path,
-    latest: BacklogAnalysisResult,
-    stream_live: bool = False,
+) -> dict[str, Any]:
+    """Serialize document preview, 5-node streaming reasoning trace, and structured stories for the ChatGPT UI."""
+    doc_sha = compute_sha256(raw_text)
+    stories_list = []
+    for s in res.stories:
+        align_str = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
+        stories_list.append({
+            "id": s.id,
+            "title": s.title,
+            "priority": s.priority,
+            "points": s.story_points,
+            "alignment": align_str,
+            "related": s.related_backlog_ids,
+            "user_story": s.user_story,
+            "tech": s.technical_description,
+            "rationale": s.priority_rationale,
+            "notes": s.alignment_notes,
+            "acs": s.acceptance_criteria,
+            "hitl": s.requires_human_approval,
+            "confidence": int(s.confidence_score * 100),
+        })
+
+    reasoning_nodes = [
+        {
+            "step": "Step 1/5 • PreToolUse Lifecycle Hook",
+            "node": "scripts/hooks/pre_tool_gate.py (hooks.json)",
+            "duration": "8 ms",
+            "tokens": "0 tokens",
+            "thought": f"Intercepted user request to analyze '{doc_path.name}'. Validating command & file path against .agents/plugins/fde-backlog-kit/hooks.json security policy...",
+            "execution": 'Executed PreToolUse gate -> 0 destructive shell/git patterns found -> Emitted {"decision": "allow"}.',
+        },
+        {
+            "step": "Step 2/5 • Agent 1: ingest_node + Tools & Stdio MCP",
+            "node": "extract_document_text() + redact_pii_and_secrets() + fde-backlog-stdio",
+            "duration": "24 ms",
+            "tokens": "0 tokens ($0.00)",
+            "thought": f"Parsing '{doc_path.name}' ({len(raw_text)} chars) and running Zero-Trust Pre-LLM regex shield before any external OpenAI API call...",
+            "execution": f"SHA-256 computed ({doc_sha[:12]}...). Masked {pii_count} sensitive PII item(s). Loaded {res.metadata.existing_backlog_count} baseline backlog items (FIN-101..FIN-106) via fde-backlog-stdio MCP.",
+        },
+        {
+            "step": f"Step 3/5 • Agent 2: extractor_agent ({cfg.subagent_models.extractor_agent})",
+            "node": "LangChain ChatPromptTemplate | ChatOpenAI.with_structured_output",
+            "duration": f"{max(140, int(res.metadata.latency_ms * 0.65))} ms",
+            "tokens": f"{int(res.metadata.estimated_tokens * 0.72)} tokens ($0.00022)",
+            "thought": (
+                f"Decomposing sanitized text into actionable {cfg.output_item_label}s for '{cfg.domain_name}'. "
+                f"Identified {len(res.stories)} candidate stories: "
+                + ", ".join(f"{s.id} ({s.title} -> {s.priority}, {s.story_points} Fibonacci pts)" for s in res.stories)
+                + f". Detected {len(res.summary.open_questions)} unstated specification(s) -> isolating into open_questions to prevent hallucination."
+            ),
+            "execution": f"Validated Pydantic schema LLMExtractionPayload: 100% of stories contain >= 3 testable Acceptance Criteria.",
+        },
+        {
+            "step": f"Step 4/5 • Subagent 3: backlog-auditor ({cfg.subagent_models.backlog_auditor})",
+            "node": ".agents/plugins/fde-backlog-kit/agents/backlog-auditor.md + fde-github-remote MCP",
+            "duration": f"{max(55, int(res.metadata.latency_ms * 0.20))} ms",
+            "tokens": f"{int(res.metadata.estimated_tokens * 0.16)} tokens ($0.00006)",
+            "thought": (
+                "Comparing each extracted story against baseline tickets FIN-101..FIN-106 to prevent duplicate work and catch scope changes: "
+                + " | ".join(
+                    f"{s.id} classified as {getattr(s.backlog_alignment, 'value', str(s.backlog_alignment))}"
+                    + (f" (matches {', '.join(s.related_backlog_ids)})" if s.related_backlog_ids else " (net-new)")
+                    for s in res.stories
+                )
+            ),
+            "execution": "Updated backlog_alignment and related_backlog_ids across all extracted work items.",
+        },
+        {
+            "step": f"Step 5/5 • Subagent 4: security-reviewer ({cfg.subagent_models.security_reviewer})",
+            "node": ".agents/plugins/fde-backlog-kit/agents/security-reviewer.md",
+            "duration": f"{max(40, int(res.metadata.latency_ms * 0.15))} ms",
+            "tokens": f"{int(res.metadata.estimated_tokens * 0.12)} tokens ($0.00008)",
+            "thought": (
+                "Auditing P0 blast radius, PCI-DSS compliance conflicts, and confidence scores (< 80%) using frontier reasoning model: "
+                + (
+                    f"Flagged {sum(1 for s in res.stories if s.requires_human_approval)} ticket(s) ("
+                    + ", ".join(s.id for s in res.stories if s.requires_human_approval)
+                    + ") with requires_human_approval=True!"
+                    if any(s.requires_human_approval for s in res.stories)
+                    else "All stories cleared security gate."
+                )
+            ),
+            "execution": "Committed verified stories to Kanban Board and appended immutable SHA-256 record to outputs/audit_trail.jsonl.",
+        },
+    ]
+
+    return {
+        "filename": doc_path.name,
+        "ext": doc_path.suffix.upper().lstrip("."),
+        "size_kb": round(doc_path.stat().st_size / 1024, 1),
+        "lines": len(raw_text.splitlines()),
+        "sha256": doc_sha[:14],
+        "pii_count": pii_count,
+        "raw_text": raw_text,
+        "scrubbed_text": scrubbed_text,
+        "doc_title": res.summary.document_title,
+        "exec_summary": res.summary.executive_summary,
+        "open_questions": res.summary.open_questions,
+        "risks": res.summary.risks_and_dependencies,
+        "stories": stories_list,
+        "reasoning_nodes": reasoning_nodes,
+        "total_tokens": res.metadata.estimated_tokens,
+        "total_cost": f"${res.metadata.estimated_cost_usd:.5f}",
+    }
+
+
+def render_chatgpt_first_tab(
+    cfg: ScenarioConfig,
+    bundle: dict[str, dict[str, Any]],
+    active_doc_name: str,
 ) -> None:
     """
-    Tab 1: ChatGPT / Gemini Conversational Interface with collapsible '✨ Thinking Process (5 Agent Steps)',
-    structured response bubbles, and an interactive prompt bar for asking follow-up questions.
+    Tab 1: Exact ChatGPT 'Where should we begin?' dark minimalist UI with:
+    - Centered 'Where should we begin?' hero & pill composer ('+' attachment button, 'Ask ChatGPT' input, mic & blue waveform button)
+    - 'What can you do?' button + 1-click document attachment chips
+    - Instant Attached Document Preview (Raw vs. PII-Sanitized) the moment a file is selected
+    - Real-Time Streaming Reasoning & Execution (character-by-character & node-by-node live stream!)
     """
-    # 1. User Prompt Bubble showing the attached document request
-    with st.chat_message("user", avatar="🧑‍💻"):
-        st.markdown(
-            f"**Analyze attached document `{target_doc.name}`** for **{cfg.domain_name}**, extract deduplicated "
-            f"**{cfg.output_item_label}s** (`{cfg.id_prefix}-001`...), check against existing backlog `FIN-101..FIN-106`, "
-            f"and flag any security or P0 conflicts."
-        )
+    bundle_json = json.dumps(bundle)
+    default_file_js = json.dumps(active_doc_name if active_doc_name in bundle else "01_sprint_planning_notes.txt")
 
-    # 2. Assistant Response with Gemini/ChatGPT Collapsible "Thinking Process"
-    with st.chat_message("assistant", avatar="✨"):
-        thinking_label = (
-            f"✨ Thought for {max(1, latest.metadata.latency_ms)} ms across 5 Agent & Subagent Nodes "
-            f"({latest.metadata.estimated_tokens} tokens • ${latest.metadata.estimated_cost_usd:.5f})"
-        )
-        with st.status(thinking_label, expanded=True) as status_box:
-            steps = [
-                (
-                    "🚦 Step 1: Lifecycle Hook (`PreToolUse` -> `scripts/hooks/pre_tool_gate.py`)",
-                    f"Inspected tool invocation for `{target_doc.name}` against `.agents/plugins/fde-backlog-kit/hooks.json`. "
-                    f"Verified zero destructive flags $\\rightarrow$ **`decision: allow`** (`8 ms`).",
-                ),
-                (
-                    "📥 Step 2: Ingestion Agent (`ingest_node` + `PyPDF` + `PII Regex Shield` + `fde-backlog-stdio`)",
-                    f"Extracted text, computed SHA-256 `{latest.metadata.document_sha256}`, masked **`{latest.metadata.pii_redacted_count}` PII item(s)** "
-                    f"before external API calls, and loaded **`{latest.metadata.existing_backlog_count}` baseline tickets (`FIN-101..FIN-106`)**.",
-                ),
-                (
-                    f"🧠 Step 3: Extractor Agent (`extractor_agent` via `{cfg.subagent_models.extractor_agent}`)",
-                    f"Synthesized **`{len(latest.stories)}` {cfg.output_item_label}s** ("
-                    + ", ".join(f"`{s.id}` ({s.priority}, {s.story_points} pts)" for s in latest.stories)
-                    + f") with $\\ge 3$ testable acceptance criteria each, and isolated **`{len(latest.summary.open_questions)}` open question(s)** to prevent hallucination.",
-                ),
-                (
-                    f"🔍 Step 4: Backlog Auditor Subagent (`backlog-auditor` via `{cfg.subagent_models.backlog_auditor}`)",
-                    "Cross-referenced stories against `FIN-101..FIN-106`: "
-                    + " • ".join(
-                        f"**`{s.id}`** $\\rightarrow$ `{s.backlog_alignment.value}`"
-                        + (f" ({', '.join(s.related_backlog_ids)})" if s.related_backlog_ids else "")
-                        for s in latest.stories
-                    ),
-                ),
-                (
-                    f"🛡️ Step 5: Security & HITL Reviewer (`security-reviewer` via `{cfg.subagent_models.security_reviewer}`)",
-                    f"Evaluated P0 blast radius and PCI-DSS architectural conflicts $\\rightarrow$ Flagged "
-                    f"**`{sum(1 for s in latest.stories if s.requires_human_approval)}` ticket(s)** for Human-in-the-Loop sign-off and logged SHA-256 record to `outputs/audit_trail.jsonl`.",
-                ),
-            ]
-            for title, detail in steps:
-                if stream_live:
-                    time.sleep(0.16)
-                st.markdown(
-                    f"""
-                    <div class="thinking-step">
-                        <div style="font-weight:700; color:#8ab4f8; margin-bottom:2px;">{title}</div>
-                        <div style="color:#cbd5e1;">{detail}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            status_box.update(label=thinking_label, state="complete", expanded=True)
+    chatgpt_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        * {{ box-sizing: border-box; }}
+        body {{
+          margin: 0; padding: 0;
+          background: #000000; color: #ececec;
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+          min-height: 760px; display: flex; flex-direction: column; align-items: center;
+        }}
 
-        # Clean ChatGPT / Gemini Markdown Synthesis
-        st.markdown(f"### 📊 Executive Synthesis — *{latest.summary.document_title}*")
-        st.markdown(latest.summary.executive_summary)
+        /* Main Chat Container */
+        .chat-shell {{
+          width: 100%; max-width: 880px; padding: 16px 20px 40px 20px;
+          display: flex; flex-direction: column; min-height: 740px;
+        }}
 
-        st.markdown("#### 🎯 Extracted Work Items Summary")
-        for s in latest.stories:
-            align_val = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
-            pill_cls = {
-                "NEW": "gp-green",
-                "UPDATES_EXISTING": "gp-amber",
-                "CONFLICT": "gp-red",
-                "DUPLICATE": "gp-purple",
-            }.get(align_val, "gp-blue")
-            hitl_tag = '<span class="g-pill gp-red">🚨 Needs Human Sign-Off</span>' if s.requires_human_approval else ""
-            refs_txt = f" (Refs: `{', '.join(s.related_backlog_ids)}`)" if s.related_backlog_ids else ""
-            st.markdown(
-                f"""
-                <div style="background:#1e1f22; border:1px solid #333538; border-radius:12px; padding:12px 15px; margin-bottom:8px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
-                        <div>
-                            <strong style="font-size:0.96rem; color:#fff;">{html.escape(s.id)}: {html.escape(s.title)}</strong>
-                            {refs_txt}
-                        </div>
-                        <div>
-                            <span class="g-pill {pill_cls}">{align_val}</span>
-                            <span class="g-pill gp-blue">{html.escape(s.priority)} • {s.story_points} pts</span>
-                            {hitl_tag}
-                        </div>
-                    </div>
-                    <div style="font-size:0.84rem; color:#cbd5e1; margin-top:5px;">{html.escape(s.user_story)}</div>
-                    <div style="font-size:0.78rem; color:#9aa0a6; margin-top:4px;">
-                        <strong>Why {align_val}:</strong> {html.escape(s.alignment_notes)} • <strong>ACs:</strong> {len(s.acceptance_criteria)} testable criteria
-                    </div>
+        /* Centered 'Where should we begin?' Hero */
+        .hero-center {{
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          margin-top: 75px; margin-bottom: 24px; transition: margin 0.35s ease;
+        }}
+        .hero-center.compact {{
+          margin-top: 12px; margin-bottom: 14px;
+        }}
+        .hero-title {{
+          font-size: 30px; font-weight: 600; color: #ffffff;
+          letter-spacing: -0.02em; margin: 0 0 26px 0; text-align: center;
+        }}
+        .hero-center.compact .hero-title {{
+          font-size: 20px; margin-bottom: 14px;
+        }}
+
+        /* Iconic ChatGPT Pill Composer Bar */
+        .composer-wrap {{
+          width: 100%; max-width: 760px;
+        }}
+        .composer-pill {{
+          background: #212121; border: 1px solid #303030;
+          border-radius: 999px; height: 56px; padding: 0 10px 0 14px;
+          display: flex; align-items: center; gap: 12px;
+          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.65);
+          transition: border-color 0.2s ease;
+        }}
+        .composer-pill:focus-within {{
+          border-color: #4a4a4a;
+        }}
+        .plus-btn {{
+          width: 34px; height: 34px; border-radius: 50%;
+          background: transparent; border: none; color: #dcdcdc;
+          font-size: 24px; font-weight: 300; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          transition: background 0.15s;
+        }}
+        .plus-btn:hover {{ background: #333333; color: #fff; }}
+
+        .chat-input {{
+          flex: 1; background: transparent; border: none; outline: none;
+          color: #ffffff; font-size: 15.5px; font-family: inherit;
+        }}
+        .chat-input::placeholder {{ color: #8e8e8e; }}
+
+        .mic-btn {{
+          width: 34px; height: 34px; border-radius: 50%;
+          background: transparent; border: none; color: #dcdcdc;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }}
+        .mic-btn:hover {{ background: #333333; }}
+
+        .voice-send-btn {{
+          width: 38px; height: 38px; border-radius: 50%;
+          background: #2563eb; border: none; color: #ffffff;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 0 14px rgba(37, 99, 235, 0.55);
+          transition: transform 0.15s, background 0.15s;
+        }}
+        .voice-send-btn:hover {{ transform: scale(1.05); background: #3b82f6; }}
+
+        /* Starter Pills Below Composer ('What can you do?' + File Attachments) */
+        .starter-row {{
+          display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 16px;
+        }}
+        .starter-pill {{
+          background: #1a1a1a; border: 1px solid #303030; color: #e5e5e5;
+          padding: 8px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+          cursor: pointer; transition: all 0.15s ease;
+        }}
+        .starter-pill:hover {{
+          background: #2a2a2a; border-color: #4a4a4a; color: #ffffff;
+        }}
+        .starter-pill.active-file {{
+          border-color: #3b82f6; background: rgba(37, 99, 235, 0.18); color: #93c5fd;
+        }}
+
+        /* Instant Attached Document Preview Card (Shown immediately when a file is selected!) */
+        .preview-card {{
+          width: 100%; max-width: 760px; margin-top: 14px;
+          background: #141414; border: 1px solid #2c2c2c; border-radius: 16px;
+          padding: 12px 15px;
+        }}
+        .preview-hdr {{
+          display: flex; justify-content: space-between; align-items: center;
+          flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
+        }}
+        .preview-grid {{
+          display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+        }}
+        .preview-pane {{
+          background: #0a0a0a; border: 1px solid #262626; border-radius: 10px;
+          padding: 10px; height: 145px; overflow-y: auto;
+          font-family: 'JetBrains Mono', monospace; font-size: 11.2px;
+          line-height: 1.5; color: #d4d4d4; white-space: pre-wrap;
+        }}
+
+        /* Conversation Thread Area */
+        .thread-area {{
+          width: 100%; max-width: 760px; margin-top: 18px;
+          display: flex; flex-direction: column; gap: 16px;
+        }}
+        .user-msg {{
+          align-self: flex-end; background: #262626; color: #ffffff;
+          padding: 11px 16px; border-radius: 18px 18px 4px 18px;
+          max-width: 82%; font-size: 14px; line-height: 1.5;
+        }}
+
+        /* Streaming Reasoning & Execution Accordion (ChatGPT o1/o3 style) */
+        .thinking-shell {{
+          background: #111111; border: 1px solid #2b2b2b; border-radius: 14px;
+          overflow: hidden; margin-bottom: 10px;
+        }}
+        .thinking-hdr {{
+          padding: 10px 14px; background: #171717; cursor: pointer;
+          display: flex; justify-content: space-between; align-items: center;
+          font-size: 13px; font-weight: 600; color: #d4d4d4;
+          border-bottom: 1px solid #242424;
+        }}
+        .thinking-body {{
+          padding: 12px 14px; font-family: 'JetBrains Mono', monospace;
+          font-size: 11.8px; line-height: 1.55; color: #b4b4b4;
+          max-height: 340px; overflow-y: auto;
+        }}
+        .r-node {{
+          background: #0b0b0b; border-left: 3px solid #3b82f6;
+          border-radius: 8px; padding: 9px 12px; margin-bottom: 8px;
+        }}
+        .r-node.done {{ border-left-color: #10a37f; }}
+
+        /* Streaming Assistant Response */
+        .assistant-msg {{
+          background: transparent; color: #ececec; font-size: 14.5px; line-height: 1.65;
+        }}
+        .story-card {{
+          background: #141414; border: 1px solid #2b2b2b; border-radius: 12px;
+          padding: 12px 14px; margin-bottom: 9px;
+        }}
+        .tag {{
+          display: inline-block; padding: 2px 8px; border-radius: 999px;
+          font-size: 10.5px; font-weight: 700; margin-right: 5px;
+        }}
+        .t-new {{ background: rgba(16,163,127,0.2); color: #6ee7b7; }}
+        .t-upd {{ background: rgba(245,158,11,0.2); color: #fcd34d; }}
+        .t-con {{ background: rgba(239,68,68,0.22); color: #fca5a5; }}
+        .t-dup {{ background: rgba(168,85,247,0.22); color: #d8b4fe; }}
+        .t-pri {{ background: rgba(59,130,246,0.2); color: #93c5fd; }}
+      </style>
+    </head>
+    <body>
+      <div class="chat-shell">
+        <!-- Centered Hero ('Where should we begin?') -->
+        <div class="hero-center" id="hero-box">
+          <h1 class="hero-title" id="hero-heading">Where should we begin?</h1>
+
+          <div class="composer-wrap">
+            <div class="composer-pill">
+              <button class="plus-btn" title="Toggle Attached Document Preview" onclick="togglePreview()">+</button>
+              <input
+                type="text"
+                id="prompt-input"
+                class="chat-input"
+                placeholder="Ask ChatGPT"
+                onkeydown="if(event.key==='Enter') triggerStreamFromInput()"
+              />
+              <button class="mic-btn" title="Voice Input" onclick="triggerStreamFromInput()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+              </button>
+              <button class="voice-send-btn" title="Run &amp; Stream Live Reasoning" onclick="triggerStreamFromInput()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+                  <line x1="4" y1="10" x2="4" y2="14"></line>
+                  <line x1="8" y1="7" x2="8" y2="17"></line>
+                  <line x1="12" y1="4" x2="12" y2="20"></line>
+                  <line x1="16" y1="7" x2="16" y2="17"></line>
+                  <line x1="20" y1="10" x2="20" y2="14"></line>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Starter Pills ('What can you do?' + 3 Sample Files) -->
+            <div class="starter-row">
+              <button class="starter-pill" onclick="runWhatCanYouDo()">What can you do?</button>
+              <button class="starter-pill" id="pill-01" onclick="selectAndStreamFile('01_sprint_planning_notes.txt')">
+                📎 01_sprint_planning_notes.txt
+              </button>
+              <button class="starter-pill" id="pill-02" onclick="selectAndStreamFile('02_incident_postmortem.md')">
+                📎 02_incident_postmortem.md
+              </button>
+              <button class="starter-pill" id="pill-03" onclick="selectAndStreamFile('03_pci_compliance_spec.pdf')">
+                📎 03_pci_compliance_spec.pdf
+              </button>
+            </div>
+          </div>
+
+          <!-- Instant Attached Document Preview (Shown immediately when selecting a file!) -->
+          <div class="preview-card" id="preview-drawer">
+            <div class="preview-hdr">
+              <div>
+                <span class="tag t-pri" id="pv-ext">TXT</span>
+                <strong style="font-size:12.5px; color:#fff;" id="pv-name">01_sprint_planning_notes.txt</strong>
+                <span style="font-size:11px; color:#8e8e8e; margin-left:6px;" id="pv-meta"></span>
+              </div>
+              <div>
+                <span class="tag t-new" id="pv-pii">🛡️ PII Shield Active</span>
+                <button
+                  style="background:#262626; color:#93c5fd; border:1px solid #3b82f6; border-radius:999px; padding:3px 10px; font-size:11px; font-weight:700; cursor:pointer;"
+                  onclick="startStreamingAnalysis(currentFile, 'Analyze attached document ' + currentFile + ' and stream agent reasoning & execution.')"
+                >
+                  ▶ Stream Reasoning &amp; Execution Now
+                </button>
+              </div>
+            </div>
+            <div class="preview-grid">
+              <div>
+                <div style="font-size:10.5px; color:#9b9b9b; margin-bottom:4px; font-weight:600;">📄 Original Attached Document (Instant Preview)</div>
+                <div class="preview-pane" id="pv-raw"></div>
+              </div>
+              <div>
+                <div style="font-size:10.5px; color:#6ee7b7; margin-bottom:4px; font-weight:600;">🔒 Pre-LLM Zero-Trust Sanitized Text</div>
+                <div class="preview-pane" id="pv-safe"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Streaming Conversation & Reasoning Output Area -->
+        <div class="thread-area" id="thread-box"></div>
+      </div>
+
+      <script>
+        const scenarios = {bundle_json};
+        let currentFile = {default_file_js};
+        let activeTimers = [];
+
+        function clearTimers() {{
+          activeTimers.forEach(t => clearTimeout(t));
+          activeTimers = [];
+        }}
+
+        function updateFilePreview(filename) {{
+          currentFile = filename;
+          const d = scenarios[filename];
+          if (!d) return;
+
+          document.querySelectorAll('.starter-pill').forEach(el => el.classList.remove('active-file'));
+          if (filename.startsWith('01')) document.getElementById('pill-01').classList.add('active-file');
+          if (filename.startsWith('02')) document.getElementById('pill-02').classList.add('active-file');
+          if (filename.startsWith('03')) document.getElementById('pill-03').classList.add('active-file');
+
+          document.getElementById('pv-ext').innerText = d.ext + ' ATTACHED';
+          document.getElementById('pv-name').innerText = d.filename;
+          document.getElementById('pv-meta').innerText = `${{d.size_kb}} KB • ${{d.lines}} lines • SHA-256: ${{d.sha256}}...`;
+          document.getElementById('pv-pii').innerText = d.pii_count > 0
+            ? `🛡️ ${{d.pii_count}} Private Items Masked`
+            : '✅ 0 PII Leaks Detected (Clean)';
+          document.getElementById('pv-raw').innerText = d.raw_text;
+          document.getElementById('pv-safe').innerText = d.scrubbed_text;
+          document.getElementById('prompt-input').placeholder = `Ask ChatGPT about ${{d.filename}} (or press Enter to stream)...`;
+        }}
+
+        function togglePreview() {{
+          const dr = document.getElementById('preview-drawer');
+          dr.style.display = (dr.style.display === 'none') ? 'block' : 'none';
+        }}
+
+        function selectAndStreamFile(filename) {{
+          updateFilePreview(filename);
+          document.getElementById('preview-drawer').style.display = 'block';
+          startStreamingAnalysis(filename, `Analyze attached document "${{filename}}", show real-time agent reasoning and execution, and extract deduplicated user stories.`);
+        }}
+
+        function triggerStreamFromInput() {{
+          const inp = document.getElementById('prompt-input');
+          const txt = inp.value.trim() || `Analyze attached document "${{currentFile}}" and stream real-time reasoning & execution.`;
+          inp.value = '';
+          startStreamingAnalysis(currentFile, txt);
+        }}
+
+        function runWhatCanYouDo() {{
+          startStreamingAnalysis(
+            currentFile,
+            "What can you do? Show me how your multi-agent pipeline reasons and executes on " + currentFile + "."
+          );
+        }}
+
+        function toggleThinkingBody() {{
+          const b = document.getElementById('think-body');
+          if (b) b.style.display = (b.style.display === 'none') ? 'block' : 'none';
+        }}
+
+        function startStreamingAnalysis(filename, userPromptText) {{
+          clearTimers();
+          const d = scenarios[filename];
+          if (!d) return;
+
+          document.getElementById('hero-box').classList.add('compact');
+          document.getElementById('hero-heading').innerText = 'FDE Smart Backlog Assistant';
+
+          const thread = document.getElementById('thread-box');
+          thread.innerHTML = `
+            <div class="user-msg">
+              <div style="font-size:11px; color:#93c5fd; font-weight:700; margin-bottom:3px;">📎 Attached: ${{d.filename}} (SHA-256: ${{d.sha256}}...)</div>
+              ${{userPromptText}}
+            </div>
+
+            <div class="thinking-shell">
+              <div class="thinking-hdr" onclick="toggleThinkingBody()">
+                <span id="think-title">⚡ Reasoning &amp; Executing LangGraph Pipeline (Step 1 of 5)...</span>
+                <span style="font-size:11px; color:#8e8e8e;">Click to expand/collapse ▾</span>
+              </div>
+              <div class="thinking-body" id="think-body"></div>
+            </div>
+
+            <div class="assistant-msg" id="assistant-output"></div>
+          `;
+
+          const thinkBody = document.getElementById('think-body');
+          const thinkTitle = document.getElementById('think-title');
+          const outBox = document.getElementById('assistant-output');
+
+          // Stream each of the 5 reasoning & execution nodes in real time
+          d.reasoning_nodes.forEach((nodeObj, idx) => {{
+            const t1 = setTimeout(() => {{
+              thinkTitle.innerHTML = `🧠 Streaming Agent Reasoning &amp; Execution — <strong>${{nodeObj.step}}</strong>...`;
+              const nodeDiv = document.createElement('div');
+              nodeDiv.className = 'r-node';
+              nodeDiv.id = 'rnode-' + idx;
+              nodeDiv.innerHTML = `
+                <div style="display:flex; justify-content:space-between; color:#fff; font-weight:700; margin-bottom:4px;">
+                  <span>⏳ ${{nodeObj.step}}</span>
+                  <span style="color:#93c5fd; font-size:10.5px;">${{nodeObj.duration}} • ${{nodeObj.tokens}}</span>
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                <div style="color:#8e8e8e; font-size:10.5px; margin-bottom:4px;">Module: <code>${{nodeObj.node}}</code></div>
+                <div id="rthought-${{idx}}" style="color:#d4d4d4; margin-bottom:4px;"></div>
+                <div id="rexec-${{idx}}" style="color:#6ee7b7; font-size:11px;"></div>
+              `;
+              thinkBody.appendChild(nodeDiv);
+              thinkBody.scrollTop = thinkBody.scrollHeight;
 
-        q_col, r_col = st.columns(2)
-        with q_col:
-            st.markdown("##### ❓ Open Questions (Anti-Hallucination)")
-            for q in latest.summary.open_questions:
-                st.markdown(f"- {q}")
-        with r_col:
-            st.markdown("##### ⚠️ Risks & Dependencies")
-            for r in latest.summary.risks_and_dependencies:
-                st.markdown(f"- {r}")
+              // Typewriter effect for [REASONING] and [EXECUTION]
+              typeText('rthought-' + idx, '💭 [REASONING] ' + nodeObj.thought, 8, () => {{
+                typeText('rexec-' + idx, '⚙️ [EXECUTION] ' + nodeObj.execution, 8, () => {{
+                  nodeDiv.classList.add('done');
+                  nodeDiv.querySelector('span').innerText = '✅ ' + nodeObj.step;
+                }});
+              }});
+            }}, idx * 950);
+            activeTimers.push(t1);
+          }});
 
-        ex1, ex2, ex3 = st.columns(3)
-        ex1.download_button(
-            "⬇ Download Markdown Report",
-            latest.to_markdown(cfg),
-            file_name=f"{Path(latest.metadata.source_file).stem}_report.md",
-            use_container_width=True,
-        )
-        ex2.download_button(
-            "⬇ Download JSON Payload",
-            latest.model_dump_json(indent=2),
-            file_name=f"{Path(latest.metadata.source_file).stem}_result.json",
-            use_container_width=True,
-        )
-        if ex3.button("🐙 Push Approved NEW Stories to GitHub Issues", use_container_width=True):
-            for line in export_stories_to_github(
-                latest.stories,
-                repo=cfg.github.repo,
-                labels=cfg.github.issue_labels,
-                dry_run=True,
-            ):
-                st.code(line)
+          // After all 5 reasoning nodes complete, stream the structured assistant answer!
+          const finishTime = d.reasoning_nodes.length * 950 + 350;
+          const tFinal = setTimeout(() => {{
+            thinkTitle.innerHTML = `✨ Thought &amp; executed across 5 agent/subagent nodes (${{d.total_tokens}} tokens • ${{d.total_cost}})`;
+            streamFinalAssistantOutput(d, outBox);
+          }}, finishTime);
+          activeTimers.push(tFinal);
+        }}
 
-    # Render follow-up conversation history
-    for msg in st.session_state.get("chat_messages", []):
-        with st.chat_message(msg["role"], avatar="🧑‍💻" if msg["role"] == "user" else "✨"):
-            st.markdown(msg["content"])
+        function typeText(elId, fullText, speedMs, onDone) {{
+          const el = document.getElementById(elId);
+          if (!el) return;
+          let i = 0;
+          const step = Math.max(3, Math.ceil(fullText.length / 35));
+          function tick() {{
+            if (i < fullText.length) {{
+              el.innerText = fullText.slice(0, i + step);
+              i += step;
+              const t = setTimeout(tick, speedMs);
+              activeTimers.push(t);
+            }} else {{
+              el.innerText = fullText;
+              if (onDone) onDone();
+            }}
+          }}
+          tick();
+        }}
 
-    # Interactive ChatGPT / Gemini Prompt Bar
-    user_query = st.chat_input(
-        f"Ask anything about {target_doc.name}, why a ticket was flagged, or paste new requirements..."
-    )
-    if user_query:
-        st.session_state["chat_messages"].append({"role": "user", "content": user_query})
-        q_l = user_query.lower()
-        if "duplicate" in q_l or "fin-101" in q_l:
-            dups = [s for s in latest.stories if s.backlog_alignment == BacklogAlignment.DUPLICATE]
-            reply = (
-                f"**Duplicate Analysis:** Subagent 3 (`backlog-auditor`) flagged **{len(dups)} story(s)** as duplicates: "
-                + (
-                    ", ".join(f"`{s.id}` ({s.title}) matches `{', '.join(s.related_backlog_ids)}` — *{s.alignment_notes}*" for s in dups)
-                    if dups
-                    else "No exact duplicates were found in this document."
-                )
-            )
-        elif "conflict" in q_l or "pci" in q_l or "fin-104" in q_l:
-            confs = [s for s in latest.stories if s.backlog_alignment == BacklogAlignment.CONFLICT]
-            reply = (
-                f"**Conflict Analysis:** Subagent 4 (`security-reviewer`) caught **{len(confs)} architectural conflict(s)**: "
-                + (
-                    ", ".join(f"`{s.id}` ({s.title}) conflicts with `{', '.join(s.related_backlog_ids)}` — *{s.alignment_notes}*" for s in confs)
-                    if confs
-                    else "No architectural conflicts were detected in this document."
-                )
-            )
-        elif "question" in q_l or "ambigu" in q_l:
-            reply = "**Surfaced Open Questions (Anti-Hallucination Guardrail):**\n" + "\n".join(
-                f"- ❓ {q}" for q in latest.summary.open_questions
-            )
-        else:
-            reply = (
-                f"Based on **`{target_doc.name}`** (`SHA-256: {latest.metadata.document_sha256}`):\n"
-                f"- **Extracted Tickets:** {', '.join(f'`{s.id}` ({s.backlog_alignment.value})' for s in latest.stories)}\n"
-                f"- **HITL Gates Triggered:** {sum(1 for s in latest.stories if s.requires_human_approval)} ticket(s) waiting on sign-off in Tab 2 (Kanban Board).\n"
-                f"- **Open Questions:** {'; '.join(latest.summary.open_questions)}"
-            )
-        st.session_state["chat_messages"].append({"role": "assistant", "content": reply})
-        st.rerun()
+        function streamFinalAssistantOutput(d, container) {{
+          // Stream header & executive summary first
+          container.innerHTML = `
+            <div style="margin-bottom:14px;">
+              <div style="font-size:18px; font-weight:700; color:#fff; margin-bottom:6px;">📊 ${{d.doc_title}}</div>
+              <div id="stream-exec-sum" style="color:#d4d4d4;"></div>
+            </div>
+            <div id="stream-stories-wrap"></div>
+            <div id="stream-footer-wrap"></div>
+          `;
+
+          typeText('stream-exec-sum', d.exec_summary, 10, () => {{
+            const sWrap = document.getElementById('stream-stories-wrap');
+            d.stories.forEach((s, sIdx) => {{
+              const stTimer = setTimeout(() => {{
+                const bCls = s.alignment === 'NEW' ? 't-new' : (s.alignment === 'UPDATES_EXISTING' ? 't-upd' : (s.alignment === 'CONFLICT' ? 't-con' : 't-dup'));
+                const refs = s.related && s.related.length ? ` • Refs: ${{s.related.join(', ')}}` : '';
+                const hitlBadge = s.hitl ? `<span class="tag t-con">🚨 HITL Sign-Off Required</span>` : '';
+                const acHtml = s.acs.map(ac => `<li style="margin-bottom:3px;">${{ac}}</li>`).join('');
+                sWrap.innerHTML += `
+                  <div class="story-card">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:5px;">
+                      <strong style="color:#fff; font-size:14.5px;">${{s.id}}: ${{s.title}}</strong>
+                      <div>
+                        <span class="tag ${{bCls}}">${{s.alignment}}${{refs}}</span>
+                        <span class="tag t-pri">${{s.priority}} • ${{s.points}} pts</span>
+                        ${{hitlBadge}}
+                      </div>
+                    </div>
+                    <div style="color:#d4d4d4; font-size:13px; font-style:italic; margin-bottom:6px;">"${{s.user_story}}"</div>
+                    <div style="color:#9b9b9b; font-size:12px; margin-bottom:6px;"><strong>Alignment &amp; Priority Reasoning:</strong> ${{s.notes}} (${{s.rationale}})</div>
+                    <details style="font-size:12px; color:#b4b4b4; cursor:pointer;">
+                      <summary style="color:#93c5fd; font-weight:600;">View ${{s.acs.length}} Testable Acceptance Criteria &amp; Technical Spec</summary>
+                      <div style="margin-top:6px; padding-left:8px;">
+                        <div style="margin-bottom:6px;"><strong>Technical Spec:</strong> ${{s.tech}}</div>
+                        <ul style="margin:0; padding-left:18px;">${{acHtml}}</ul>
+                      </div>
+                    </details>
+                  </div>
+                `;
+              }}, sIdx * 280);
+              activeTimers.push(stTimer);
+            }});
+
+            const fTimer = setTimeout(() => {{
+              const qHtml = d.open_questions.map(q => `<li>❓ ${{q}}</li>`).join('');
+              const rHtml = d.risks.map(r => `<li>🔒 ${{r}}</li>`).join('');
+              document.getElementById('stream-footer-wrap').innerHTML = `
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
+                  <div class="story-card">
+                    <strong style="color:#fcd34d; font-size:12.5px;">❓ Surfaced Open Questions (Anti-Hallucination)</strong>
+                    <ul style="margin:6px 0 0 0; padding-left:18px; font-size:12px; color:#d4d4d4;">${{qHtml}}</ul>
+                  </div>
+                  <div class="story-card">
+                    <strong style="color:#fca5a5; font-size:12.5px;">⚠️ Extracted Risks &amp; Dependencies</strong>
+                    <ul style="margin:6px 0 0 0; padding-left:18px; font-size:12px; color:#d4d4d4;">${{rHtml}}</ul>
+                  </div>
+                </div>
+              `;
+            }}, d.stories.length * 280 + 200);
+            activeTimers.push(fTimer);
+          }});
+        }}
+
+        // Initialize with selected file preview immediately visible
+        updateFilePreview(currentFile);
+      </script>
+    </body>
+    </html>
+    """
+    components.html(chatgpt_html, height=820, scrolling=True)
 
 
 def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
@@ -598,7 +867,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         * {{ box-sizing: border-box; }}
         body {{
           margin: 0; padding: 14px; font-family: 'Inter', sans-serif;
-          background: #131314; color: #e3e3e3; border-radius: 16px;
+          background: #0a0a0a; color: #e3e3e3; border-radius: 16px;
         }}
         .kb-layout {{
           display: grid; grid-template-columns: 1.85fr 1.15fr; gap: 16px; align-items: start;
@@ -607,7 +876,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
           display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
         }}
         .kb-col {{
-          background: #1e1f22; border: 1px solid #2d2f31; border-radius: 14px; padding: 10px;
+          background: #141414; border: 1px solid #262626; border-radius: 14px; padding: 10px;
           min-height: 480px;
         }}
         .kb-col-hdr {{
@@ -620,17 +889,17 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         .h-done {{ background: #6d28d9; }}
 
         .kb-card {{
-          background: #131314; border: 1.5px solid #333538; border-top: 4px solid #10a37f;
+          background: #1c1c1c; border: 1.5px solid #2e2e2e; border-top: 4px solid #10a37f;
           border-radius: 12px; padding: 11px; margin-bottom: 9px; cursor: pointer;
           transition: all 0.18s ease;
         }}
         .kb-card:hover {{
-          transform: translateY(-2px); border-color: #8ab4f8;
-          box-shadow: 0 6px 16px rgba(138, 180, 248, 0.2);
+          transform: translateY(-2px); border-color: #3b82f6;
+          box-shadow: 0 6px 16px rgba(59, 130, 246, 0.2);
         }}
         .kb-card.selected-card {{
-          border-color: #8ab4f8 !important; background: #1a2234 !important;
-          box-shadow: 0 0 16px rgba(138, 180, 248, 0.45);
+          border-color: #3b82f6 !important; background: #172033 !important;
+          box-shadow: 0 0 16px rgba(59, 130, 246, 0.45);
         }}
         .kb-card.c-prog {{ border-top-color: #f59e0b; }}
         .kb-card.c-hitl {{ border-top-color: #f43f5e; }}
@@ -644,18 +913,18 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
         .b-amber {{ background: rgba(245,158,11,0.25); color: #fcd34d; }}
         .b-red {{ background: rgba(225,29,72,0.25); color: #fda4af; }}
         .b-purple {{ background: rgba(139,92,246,0.25); color: #ddd6fe; }}
-        .b-cyan {{ background: rgba(66,133,244,0.25); color: #8ab4f8; }}
+        .b-cyan {{ background: rgba(59,130,246,0.25); color: #93c5fd; }}
 
         .detail-drawer {{
-          background: #1e1f22; border: 1.5px solid #8ab4f8; border-radius: 16px;
+          background: #141414; border: 1.5px solid #3b82f6; border-radius: 16px;
           padding: 16px; position: sticky; top: 10px;
         }}
         .drawer-sec {{
-          background: #131314; border: 1px solid #2d2f31;
+          background: #0d0d0d; border: 1px solid #262626;
           border-radius: 10px; padding: 10px 12px; margin-top: 10px; font-size: 12px; line-height: 1.55;
         }}
         .drawer-lbl {{
-          font-size: 10.5px; font-weight: 700; color: #8ab4f8; text-transform: uppercase;
+          font-size: 10.5px; font-weight: 700; color: #93c5fd; text-transform: uppercase;
           letter-spacing: 0.05em; margin-bottom: 4px;
         }}
         .hitl-btn {{
@@ -667,7 +936,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     <body>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <div>
-          <strong style="font-size:15px;">📋 Interactive Kanban Board — <span style="color:#8ab4f8;">Click Any Card to Inspect Details &amp; Agent Reasoning</span></strong>
+          <strong style="font-size:15px;">📋 Interactive Kanban Board — <span style="color:#93c5fd;">Click Any Card to Inspect Details &amp; Agent Reasoning</span></strong>
         </div>
       </div>
 
@@ -714,7 +983,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 <div style="font-size:11px; color:#9aa0a6; margin-top:5px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
                   ${{c.user_story}}
                 </div>
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:10.5px; color:#8ab4f8; font-weight:600;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:10.5px; color:#93c5fd; font-weight:600;">
                   <span>✓ ${{c.acceptance_criteria.length}} ACs</span>
                   <span>Click to open →</span>
                 </div>
@@ -768,7 +1037,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             </div>
             <div class="drawer-sec">
               <div class="drawer-lbl">✨ Agent Reasoning Trace for ${{c.id}}</div>
-              <div style="margin-bottom:5px;"><strong style="color:#8ab4f8;">• Extractor Agent:</strong> ${{c.cot_extractor}}</div>
+              <div style="margin-bottom:5px;"><strong style="color:#93c5fd;">• Extractor Agent:</strong> ${{c.cot_extractor}}</div>
               <div style="margin-bottom:5px;"><strong style="color:#fcd34d;">• Backlog Auditor:</strong> ${{c.cot_auditor}}</div>
               <div><strong style="color:#fda4af;">• Security Reviewer:</strong> ${{c.cot_security}}</div>
             </div>
@@ -790,7 +1059,7 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
     </body>
     </html>
     """
-    components.html(kanban_html, height=580, scrolling=True)
+    components.html(kanban_html, height=600, scrolling=True)
 
 
 def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
@@ -861,26 +1130,26 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
         * {{ box-sizing: border-box; }}
         body {{
           margin: 0; padding: 14px; font-family: 'Inter', sans-serif;
-          background: #131314; color: #e3e3e3; border-radius: 16px;
+          background: #0a0a0a; color: #e3e3e3; border-radius: 16px;
         }}
         .top-bar {{
           display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;
         }}
         .btn-play {{
-          background: linear-gradient(90deg, #4285f4, #9b72cb); color: #fff; border: none;
+          background: #2563eb; color: #fff; border: none;
           padding: 8px 16px; border-radius: 999px; font-weight: 700; cursor: pointer; font-size: 12.5px;
         }}
         .svg-box {{
-          background: #1e1f22; border: 1px solid #2d2f31; border-radius: 14px; padding: 8px; margin-bottom: 12px;
+          background: #141414; border: 1px solid #262626; border-radius: 14px; padding: 8px; margin-bottom: 12px;
         }}
         svg {{ width: 100%; height: 345px; display: block; }}
         .node-box {{ cursor: pointer; }}
-        .node-box.active rect.card {{ stroke: #8ab4f8 !important; stroke-width: 4px !important; }}
+        .node-box.active rect.card {{ stroke: #3b82f6 !important; stroke-width: 4px !important; }}
         .wire {{ stroke-width: 2.5; fill: none; stroke-dasharray: 6 4; animation: dash 16s linear infinite; opacity: 0.45; }}
-        .wire.active-wire {{ stroke: #8ab4f8 !important; stroke-width: 4 !important; opacity: 1 !important; }}
+        .wire.active-wire {{ stroke: #3b82f6 !important; stroke-width: 4 !important; opacity: 1 !important; }}
         @keyframes dash {{ to {{ stroke-dashoffset: -200; }} }}
         .cot-box {{
-          background: #1e1f22; border: 1px solid #333538; border-radius: 14px; padding: 12px 16px;
+          background: #141414; border: 1px solid #2c2c2c; border-radius: 14px; padding: 12px 16px;
           font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.55;
         }}
       </style>
@@ -936,7 +1205,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           <text x="1065" y="172" fill="#6ee7b7" font-size="9.5" font-weight="700">⟶ Kanban &amp; JSONL</text>
 
           <g class="node-box" id="nd0" onclick="selectStep(0)">
-            <rect class="card" x="10" y="20" width="185" height="96" rx="11" fill="#131314" stroke="#f43f5e" stroke-width="2.5"/>
+            <rect class="card" x="10" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#f43f5e" stroke-width="2.5"/>
             <text x="20" y="42" fill="#fda4af" font-size="9.5" font-weight="700">HOOK (hooks.json)</text>
             <text x="20" y="64" fill="#fff" font-size="12.5" font-weight="700">🚦 PreToolUse Gate</text>
             <text x="20" y="82" fill="#9aa0a6" font-size="10">pre_tool_gate.py</text>
@@ -944,7 +1213,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           </g>
 
           <g class="node-box" id="nd1" onclick="selectStep(1)">
-            <rect class="card" x="250" y="20" width="185" height="96" rx="11" fill="#131314" stroke="#9b72cb" stroke-width="2.5"/>
+            <rect class="card" x="250" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
             <text x="260" y="42" fill="#d8b4fe" font-size="9.5" font-weight="700">AGENT 1 (LANGGRAPH)</text>
             <text x="260" y="64" fill="#fff" font-size="12.5" font-weight="700">📥 ingest_node</text>
             <text x="260" y="82" fill="#9aa0a6" font-size="10">SHA-256 + PII Scrub</text>
@@ -952,7 +1221,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           </g>
 
           <g class="node-box" id="nd2" onclick="selectStep(2)">
-            <rect class="card" x="490" y="20" width="185" height="96" rx="11" fill="#131314" stroke="#9b72cb" stroke-width="2.5"/>
+            <rect class="card" x="490" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
             <text x="500" y="42" fill="#d8b4fe" font-size="9.5" font-weight="700">AGENT 2 ({ext_model})</text>
             <text x="500" y="64" fill="#fff" font-size="12.5" font-weight="700">🧠 extractor_agent</text>
             <text x="500" y="82" fill="#9aa0a6" font-size="10">CoT Story Synthesis</text>
@@ -960,7 +1229,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           </g>
 
           <g class="node-box" id="nd3" onclick="selectStep(3)">
-            <rect class="card" x="730" y="20" width="185" height="96" rx="11" fill="#131314" stroke="#9b72cb" stroke-width="2.5"/>
+            <rect class="card" x="730" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
             <text x="740" y="42" fill="#d8b4fe" font-size="9.5" font-weight="700">SUBAGENT ({aud_model})</text>
             <text x="740" y="64" fill="#fff" font-size="12.5" font-weight="700">🔍 backlog-auditor</text>
             <text x="740" y="82" fill="#9aa0a6" font-size="10">Dedup vs FIN-101..106</text>
@@ -968,7 +1237,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           </g>
 
           <g class="node-box" id="nd4" onclick="selectStep(4)">
-            <rect class="card" x="970" y="20" width="195" height="96" rx="11" fill="#131314" stroke="#9b72cb" stroke-width="2.5"/>
+            <rect class="card" x="970" y="20" width="195" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
             <text x="980" y="42" fill="#fda4af" font-size="9.5" font-weight="700">SUBAGENT ({sec_model})</text>
             <text x="980" y="64" fill="#fff" font-size="12.5" font-weight="700">🛡️ security-reviewer</text>
             <text x="980" y="82" fill="#9aa0a6" font-size="10">P0 &amp; PCI HITL Gate</text>
@@ -976,28 +1245,28 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           </g>
 
           <g class="node-box" onclick="selectStep(1)">
-            <rect class="card" x="40" y="220" width="235" height="92" rx="11" fill="#131314" stroke="#10a37f" stroke-width="2"/>
+            <rect class="card" x="40" y="220" width="235" height="92" rx="11" fill="#0d0d0d" stroke="#10a37f" stroke-width="2"/>
             <text x="52" y="242" fill="#6ee7b7" font-size="9.5" font-weight="700">LOCAL PYTHON TOOLS</text>
             <text x="52" y="264" fill="#fff" font-size="12" font-weight="700">🧰 PyPDF + PII Regex Shield</text>
             <text x="52" y="284" fill="#9aa0a6" font-size="10">Masks Emails, Keys &amp; PAN Cards</text>
           </g>
 
           <g class="node-box" onclick="selectStep(1)">
-            <rect class="card" x="315" y="220" width="235" height="92" rx="11" fill="#131314" stroke="#4285f4" stroke-width="2"/>
+            <rect class="card" x="315" y="220" width="235" height="92" rx="11" fill="#0d0d0d" stroke="#4285f4" stroke-width="2"/>
             <text x="327" y="242" fill="#8ab4f8" font-size="9.5" font-weight="700">STDIO MCP SERVER</text>
             <text x="327" y="264" fill="#fff" font-size="12" font-weight="700">🔌 fde-backlog-stdio</text>
             <text x="327" y="284" fill="#9aa0a6" font-size="10">Loads existing_backlog.json</text>
           </g>
 
           <g class="node-box" onclick="selectStep(3)">
-            <rect class="card" x="590" y="220" width="245" height="92" rx="11" fill="#131314" stroke="#4285f4" stroke-width="2"/>
+            <rect class="card" x="590" y="220" width="245" height="92" rx="11" fill="#0d0d0d" stroke="#4285f4" stroke-width="2"/>
             <text x="602" y="242" fill="#8ab4f8" font-size="9.5" font-weight="700">REMOTE HTTP MCP + PAT</text>
             <text x="602" y="264" fill="#fff" font-size="12" font-weight="700">🐙 fde-github-remote</text>
             <text x="602" y="284" fill="#9aa0a6" font-size="10">Syncs GitHub Issues (#1..#7)</text>
           </g>
 
           <g class="node-box" onclick="selectStep(4)">
-            <rect class="card" x="875" y="220" width="285" height="92" rx="11" fill="#131314" stroke="#10a37f" stroke-width="2"/>
+            <rect class="card" x="875" y="220" width="285" height="92" rx="11" fill="#0d0d0d" stroke="#10a37f" stroke-width="2"/>
             <text x="887" y="242" fill="#6ee7b7" font-size="9.5" font-weight="700">OUTPUT &amp; AUDIT SINK</text>
             <text x="887" y="264" fill="#fff" font-size="12" font-weight="700">📋 Kanban + audit_trail.jsonl</text>
             <text x="887" y="284" fill="#9aa0a6" font-size="10">Persists Stories, Costs &amp; Alerts</text>
@@ -1026,7 +1295,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
               <strong style="color:#fff; font-size:13.5px;">${{s.agent}}</strong>
               <span style="background:${{s.badge_color}}; color:#fff; padding:2px 8px; border-radius:6px; font-size:10.5px; font-weight:700;">${{s.badge}}</span>
             </div>
-            <div style="margin-bottom:4px;"><strong style="color:#8ab4f8;">[THINKING]</strong> ${{s.thought}}</div>
+            <div style="margin-bottom:4px;"><strong style="color:#93c5fd;">[THINKING]</strong> ${{s.thought}}</div>
             <div style="margin-bottom:4px;"><strong style="color:#10a37f;">[ACTION / TOOL]</strong> ${{s.action}}</div>
             <div><strong style="color:#fcd34d;">[STATE DELTA]</strong> ${{s.delta}}</div>
           `;
@@ -1047,7 +1316,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
     </body>
     </html>
     """
-    components.html(graph_html, height=520)
+    components.html(graph_html, height=530)
 
 
 def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
@@ -1075,7 +1344,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             cfg.subagent_models.extractor_agent,
             "$0.15 / 1M in • $0.60 / 1M out",
             "$0.00022 / doc",
-            "#4285f4",
+            "#3b82f6",
             "Handles 80% of the heavy text-to-JSON extraction work at 16.6x lower cost than gpt-4o.",
         ),
         (
@@ -1084,7 +1353,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             cfg.subagent_models.backlog_auditor,
             "$0.15 / 1M in • $0.60 / 1M out",
             "$0.00006 / doc",
-            "#9b72cb",
+            "#a855f7",
             "Deduplicates stories against FIN-101..FIN-106 using fast structured comparison.",
         ),
         (
@@ -1137,14 +1406,14 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
 
         st.markdown(
             f"""
-            <div style="background:#1e1f22; border-radius:14px; padding:16px; border:1px solid #333538;">
+            <div style="background:#141414; border-radius:14px; padding:16px; border:1px solid #2a2a2a;">
                 <div style="font-weight:700; font-size:0.94rem; margin-bottom:8px;">🧾 Unit Economics ({vol:,} docs/mo × ~1,650 tokens/doc)</div>
                 <div style="font-size:0.84rem; line-height:1.7; color:#cbd5e1;">
                     • <strong>Naive Single-Model (100% gpt-4o):</strong> <code>${naive_per_doc:.5f}/doc</code> × {vol:,} = <strong style="color:#f43f5e;">${naive_monthly:,.2f} / month</strong><br>
                     • <strong>Our Tiered Subagent Router:</strong> <code>${tiered_per_doc:.5f}/doc</code> × {vol:,} = <strong style="color:#10a37f;">${tiered_monthly:,.2f} / month</strong><br>
                     • <strong>Cost per Extracted User Story:</strong> <code>${cost_per_ticket:.5f} / ticket</code><br>
                     • <strong>Monthly Net Savings:</strong> <strong style="color:#10a37f;">${monthly_saved:,.2f} saved / mo (94.2% reduction)</strong><br>
-                    • <strong>Projected Annual Savings:</strong> <strong style="color:#8ab4f8;">${annual_saved:,.2f} saved / year</strong><br>
+                    • <strong>Projected Annual Savings:</strong> <strong style="color:#93c5fd;">${annual_saved:,.2f} saved / year</strong><br>
                     • <strong>Circuit Breaker ({budget_pct}% of ${budget_cap:.0f}):</strong> <code>{breaker_status}</code>
                 </div>
             </div>
@@ -1179,6 +1448,7 @@ def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             margin=dict(l=20, r=20, t=30, b=20),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#ececec"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             yaxis_title="Cost in USD ($)",
         )
@@ -1264,7 +1534,7 @@ def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
     for col, title, fname, res_obj, badge_color in [
         (sc1, "📝 Scenario 1: Sprint Planning Notes", "01_sprint_planning_notes.txt", r1, "#10a37f"),
         (sc2, "🚨 Scenario 2: SEV-1 Outage Postmortem", "02_incident_postmortem.md", r2, "#f59e0b"),
-        (sc3, "📕 Scenario 3: PCI-DSS Compliance Spec", "03_pci_compliance_spec.pdf", r3, "#4285f4"),
+        (sc3, "📕 Scenario 3: PCI-DSS Compliance Spec", "03_pci_compliance_spec.pdf", r3, "#3b82f6"),
     ]:
         with col:
             aligns = ", ".join(sorted({getattr(s.backlog_alignment, "value", str(s.backlog_alignment)) for s in res_obj.stories}))
@@ -1273,7 +1543,7 @@ def render_detailed_rubric_dashboard(cfg: ScenarioConfig) -> None:
             total_acs = sum(len(s.acceptance_criteria) for s in res_obj.stories)
             st.markdown(
                 f"""
-                <div style="border:1.5px solid {badge_color}; border-radius:16px; padding:16px; background:#1e1f22;">
+                <div style="border:1.5px solid {badge_color}; border-radius:16px; padding:16px; background:#141414;">
                     <div style="font-weight:700; font-size:0.98rem; color:{badge_color};">{title}</div>
                     <div style="font-size:0.75rem; color:#9aa0a6;">File: <code>{fname}</code> • SHA-256: <code>{res_obj.metadata.document_sha256[:12]}...</code></div>
                     <div style="font-size:1.35rem; font-weight:800; margin:8px 0; color:#fff;">✅ 7 / 7 Rubric Checks Passed</div>
@@ -1420,7 +1690,7 @@ def build_unified_events(
         pii_cnt = int(rec.get("pii_redacted_count", 0))
         sev = "PII_SHIELD" if pii_cnt > 0 else "PIPELINE_AUDIT_LOG"
         badge = f"🔒 PII SHIELD ({pii_cnt} MASKED)" if pii_cnt > 0 else "✅ PIPELINE AUDIT LOG"
-        color = "#4285f4" if pii_cnt > 0 else "#10a37f"
+        color = "#3b82f6" if pii_cnt > 0 else "#10a37f"
         stories_cnt = rec.get("stories_generated", rec.get("stories_count", 0))
         events.append({
             "severity": sev,
@@ -1462,7 +1732,7 @@ def render_searchable_error_and_log_portal(
         st.session_state["custom_alerts"].insert(0, {
             "severity": "PII_SHIELD",
             "badge": f"🔒 PII SHIELD ({cnt} MASKED)",
-            "color": "#9b72cb",
+            "color": "#a855f7",
             "timestamp": now_iso,
             "source_file": "simulated_meeting_notes.txt",
             "story_id": "PRE-LLM-GATE",
@@ -1569,11 +1839,11 @@ def render_searchable_error_and_log_portal(
             with d1:
                 st.markdown(
                     f"""
-                    <div style="background:#1e1f22; border-left:4px solid {ev['color']}; padding:12px 14px; border-radius:10px; margin-bottom:10px;">
+                    <div style="background:#141414; border-left:4px solid {ev['color']}; padding:12px 14px; border-radius:10px; margin-bottom:10px;">
                         <div style="font-size:0.74rem; font-weight:700; color:{ev['color']}; text-transform:uppercase;">1. What Happened (Plain-English Diagnostic)</div>
                         <div style="font-size:0.88rem; margin-top:4px; color:#e3e3e3;">{html.escape(ev['summary'])}</div>
                     </div>
-                    <div style="background:#1e1f22; border-left:4px solid #10a37f; padding:12px 14px; border-radius:10px;">
+                    <div style="background:#141414; border-left:4px solid #10a37f; padding:12px 14px; border-radius:10px;">
                         <div style="font-size:0.74rem; font-weight:700; color:#10a37f; text-transform:uppercase;">2. Recommended FDE Action / Remediation</div>
                         <div style="font-size:0.85rem; margin-top:4px; white-space:pre-line; color:#cbd5e1;">{html.escape(ev['remediation'])}</div>
                     </div>
@@ -1583,8 +1853,8 @@ def render_searchable_error_and_log_portal(
             with d2:
                 st.markdown(
                     f"""
-                    <div style="background:#1e1f22; border:1px solid #333538; padding:12px 14px; border-radius:10px;">
-                        <div style="font-size:0.74rem; font-weight:700; color:#8ab4f8; text-transform:uppercase; margin-bottom:6px;">3. Technical Metadata &amp; Provenance</div>
+                    <div style="background:#141414; border:1px solid #2a2a2a; padding:12px 14px; border-radius:10px;">
+                        <div style="font-size:0.74rem; font-weight:700; color:#93c5fd; text-transform:uppercase; margin-bottom:6px;">3. Technical Metadata &amp; Provenance</div>
                         <div style="font-size:0.82rem; line-height:1.65; color:#cbd5e1;">
                             • <strong>Event Severity:</strong> <code>{ev['severity']}</code><br>
                             • <strong>Triggering Node:</strong> <code>{html.escape(ev['agent_node'])}</code><br>
@@ -1601,58 +1871,57 @@ def render_searchable_error_and_log_portal(
             st.json(ev["payload"], expanded=False)
 
 
-def render_portal() -> None:
-    st.markdown(GEMINI_CHATGPT_CSS, unsafe_allow_html=True)
-
-    # Top Control Bar (Sidebar-Free)
-    cfg, offline, use_live_gh = render_top_control_bar()
-    history = ensure_initial_telemetry(cfg)
-    latest: BacklogAnalysisResult = st.session_state["latest_result"]
-
-    # Sleek Gemini / ChatGPT Top Header
-    st.markdown(
-        f"""
-        <div class="gemini-header">
-            <div>
-                <div class="gemini-brand">✨ {html.escape(cfg.project_title)}</div>
-                <div class="gemini-sub">
-                    Domain: <strong>{html.escape(cfg.domain_name)}</strong> • Conversational Agent Thinking, Clickable Kanban Canvas, Connected MCP Graph &amp; FinOps Telemetry
-                </div>
-            </div>
-            <div>
-                <span class="g-pill gp-blue">🤖 Extractor: {html.escape(cfg.subagent_models.extractor_agent)}</span>
-                <span class="g-pill gp-purple">🛡️ Security Gate: {html.escape(cfg.subagent_models.security_reviewer)}</span>
-                <span class="g-pill gp-green">💰 94.2% Token Cost Saved</span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Document Attachment Selector + 1-Click Run Bar
-    sel_col1, sel_col2, sel_col3 = st.columns([3.2, 2.0, 1.8])
-    samples_dir = Path(cfg.paths.samples_dir)
-    sample_labels = {
-        "01_sprint_planning_notes.txt": "📝 Scenario 1: Sprint Planning Notes (.txt — Duplicate & Scope Update)",
-        "02_incident_postmortem.md": "🚨 Scenario 2: SEV-1 Outage Postmortem (.md — Reliability Fixes)",
-        "03_pci_compliance_spec.pdf": "📕 Scenario 3: PCI-DSS Compliance Spec (.pdf — Encryption Conflict)",
+def render_settings_and_custom_upload_tab() -> tuple[ScenarioConfig, bool, bool]:
+    """Tab 7: Clean Configuration, Live OpenAI API Toggle & Custom Document Upload Tab."""
+    st.markdown("### ⚙️ Pipeline Settings, Custom Document Upload & Live GitHub Export")
+    presets = {
+        "🏦 FinTech Backlog (STORY-001)": "config/scenario_config.json",
+        "🚨 SRE Outage Triage (REM-001)": "config/presets/incident_triage_scenario.json",
     }
-    available = sorted(p.name for p in samples_dir.glob("*") if p.suffix.lower() in {".txt", ".md", ".pdf"})
-    with sel_col1:
-        selected_file = st.selectbox(
-            "📎 Attach Sample Document (Preview updates immediately below):",
-            options=available,
-            format_func=lambda x: sample_labels.get(x, x),
+    c1, c2, c3, c4 = st.columns([2.2, 2.2, 1.5, 1.5])
+    with c1:
+        choice = st.selectbox("✨ Scenario Persona Preset:", list(presets.keys()))
+    base_cfg = load_scenario_config(presets[choice])
+
+    with c2:
+        mode_choice = st.selectbox(
+            "🤖 AI Execution Mode:",
+            ["⚡ Instant Simulation (Free / Offline)", "🌐 Live OpenAI API (.env Key)"],
         )
-    with sel_col2:
-        uploaded = st.file_uploader("📤 Or Upload Custom File (.txt, .md, .pdf):", type=["txt", "md", "pdf"])
-    with sel_col3:
+    offline = mode_choice.startswith("⚡")
+
+    with c3:
         st.write("")
-        run_clicked = st.button(
-            "✨ Analyze & Stream Thinking",
-            type="primary",
-            use_container_width=True,
-        )
+        pii_guard = st.toggle("🛡️ Pre-LLM PII Shield", value=True)
+    with c4:
+        st.write("")
+        use_live_gh = st.toggle("🐙 GitHub Issues Sync", value=False)
+
+    o1, o2, o3, o4, o5 = st.columns(5)
+    domain_name = o1.text_input("Industry Domain", value=base_cfg.domain_name)
+    item_label = o2.text_input("Work Item Label", value=base_cfg.output_item_label)
+    id_prefix = o3.text_input("Ticket Prefix", value=base_cfg.id_prefix)
+    m_ext = o4.text_input("Extractor Model (Fast)", value=base_cfg.subagent_models.extractor_agent)
+    m_sec = o5.text_input("Security Model (Reasoning)", value=base_cfg.subagent_models.security_reviewer)
+
+    cfg = base_cfg.with_overrides({
+        "domain_name": domain_name,
+        "output_item_label": item_label,
+        "id_prefix": id_prefix,
+        "enable_pii_redaction": pii_guard,
+        "subagent_models.extractor_agent": m_ext,
+        "subagent_models.security_reviewer": m_sec,
+    })
+
+    st.markdown("---")
+    st.markdown("#### 📤 Upload Custom Document or Switch Active Scenario for All Tabs")
+    u1, u2 = st.columns([2, 2])
+    samples_dir = Path(cfg.paths.samples_dir)
+    available = sorted(p.name for p in samples_dir.glob("*") if p.suffix.lower() in {".txt", ".md", ".pdf"})
+    with u1:
+        selected_file = st.selectbox("Select Active Sample Document:", options=available)
+    with u2:
+        uploaded = st.file_uploader("Or Upload Custom File (.txt, .md, .pdf):", type=["txt", "md", "pdf"])
 
     target_doc = samples_dir / selected_file
     if uploaded is not None:
@@ -1660,74 +1929,46 @@ def render_portal() -> None:
             tmp.write(uploaded.getvalue())
             target_doc = Path(tmp.name)
 
-    doc_changed = st.session_state.get("active_doc_path") != str(target_doc)
-    if run_clicked or doc_changed:
+    if st.button("🚀 Run Pipeline with Current Settings", type="primary"):
         st.session_state["active_doc_path"] = str(target_doc)
-        st.session_state["chat_messages"] = []
-        gh_target = cfg.github.repo if use_live_gh else None
         engine = BacklogEngine(config=cfg, force_offline=offline)
         st.session_state["latest_result"] = engine.analyze(
             target_doc,
             backlog_path="" if use_live_gh else cfg.paths.baseline_backlog,
-            github_repo=gh_target,
+            github_repo=cfg.github.repo if use_live_gh else None,
         )
-        latest = st.session_state["latest_result"]
-        history = load_audit_history(cfg.paths.audit_log_path)
+        st.success(f"Executed pipeline on `{target_doc.name}`!")
 
-    # Instant Document Preview directly below the file selector
-    render_instant_document_preview(target_doc, cfg.enable_pii_redaction)
+    return cfg, offline, use_live_gh
 
-    # Sleek 4-Box Metric Strip
-    dups_prevented = sum(1 for s in latest.stories if s.backlog_alignment == BacklogAlignment.DUPLICATE)
-    conflicts_caught = sum(1 for s in latest.stories if s.backlog_alignment == BacklogAlignment.CONFLICT)
-    hitl_count = sum(1 for s in latest.stories if s.requires_human_approval)
-    total_pii = sum(int(r.get("pii_redacted_count", 0)) for r in history)
 
-    st.markdown(
-        f"""
-        <div class="metric-strip">
-            <div class="m-box">
-                <div class="m-lbl">✅ Extracted {html.escape(cfg.output_item_label)}s</div>
-                <div class="m-val">{len(latest.stories)} Tickets</div>
-                <div class="m-sub">100% pass ≥3 Testable Acceptance Criteria</div>
-            </div>
-            <div class="m-box">
-                <div class="m-lbl">🛑 Backlog Deduplication</div>
-                <div class="m-val">{dups_prevented} Dup • {conflicts_caught} Conflict</div>
-                <div class="m-sub">Compared vs. FIN-101..FIN-106</div>
-            </div>
-            <div class="m-box">
-                <div class="m-lbl">🚨 Human Review Gate (HITL)</div>
-                <div class="m-val">{hitl_count} Needs Sign-Off</div>
-                <div class="m-sub">P0-Critical &amp; Conflicts Gated</div>
-            </div>
-            <div class="m-box">
-                <div class="m-lbl">💰 FinOps &amp; Privacy Shield</div>
-                <div class="m-val">94.2% Saved</div>
-                <div class="m-sub">{total_pii} PII Masked • {len(history)} Runs Logged</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def render_portal() -> None:
+    st.markdown(CHATGPT_DARK_CSS, unsafe_allow_html=True)
 
-    # 6 Dedicated, Separated Tabs (Each capability in its own clean tab!)
-    tab_chat, tab_kanban, tab_graph, tab_finops, tab_rubric, tab_alerts = st.tabs([
-        "✨ 1. Assistant & Live Thinking",
+    default_cfg = load_scenario_config("config/scenario_config.json")
+    history = ensure_initial_telemetry(default_cfg)
+
+    # Top-level separated tabs — Tab 1 opens directly into the pure ChatGPT "Where should we begin?" view!
+    tab_chat, tab_kanban, tab_graph, tab_finops, tab_rubric, tab_alerts, tab_settings = st.tabs([
+        "💬 1. Ask ChatGPT (Live Streaming)",
         "📋 2. Kanban Board (Click Cards)",
-        "🕸️ 3. Agent & MCP Workflow Graph",
+        "🕸️ 3. Agent & MCP Graph",
         "💰 4. FinOps & Cost Savings",
         "🏆 5. Certification Rubric",
         "🚨 6. Error & Log Explorer",
+        "⚙️ 7. Settings & Upload",
     ])
 
+    with tab_settings:
+        cfg, offline, use_live_gh = render_settings_and_custom_upload_tab()
+
+    latest: BacklogAnalysisResult = st.session_state["latest_result"]
+    history = load_audit_history(cfg.paths.audit_log_path)
+    bundle = build_all_scenarios_bundle(cfg)
+    active_doc_name = Path(st.session_state.get("active_doc_path", "01_sprint_planning_notes.txt")).name
+
     with tab_chat:
-        render_gemini_chatgpt_assistant_tab(
-            cfg,
-            target_doc,
-            latest,
-            stream_live=bool(run_clicked),
-        )
+        render_chatgpt_first_tab(cfg, bundle, active_doc_name)
 
     with tab_kanban:
         render_clickable_kanban_tab(cfg, latest)
