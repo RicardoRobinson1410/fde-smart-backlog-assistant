@@ -2982,61 +2982,66 @@ def render_doc_to_tasks_pipeline_tab(cfg: ScenarioConfig) -> None:
 
 
 def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
-    """Tab 3: Dedicated Interactive SVG Agent, Subagent, Tool & MCP Network Graph + Step-by-Step Reasoning Stream."""
+    """Tab 7: Dedicated Interactive SVG Agent, Subagent, Tool & MCP Network Graph + Step-by-Step Reasoning Stream."""
     ext_model = html.escape(cfg.subagent_models.extractor_agent)
     aud_model = html.escape(cfg.subagent_models.backlog_auditor)
     sec_model = html.escape(cfg.subagent_models.security_reviewer)
+    backlog_file = html.escape(Path(cfg.paths.baseline_backlog).name)
+    audit_file = html.escape(Path(cfg.paths.audit_log_path).name)
+    id_pref = html.escape(cfg.id_prefix)
+    src_label = html.escape(latest.metadata.source_file if latest.metadata.source_file != "none" else f"{cfg.project_title} input")
+    n_existing = len(load_existing_backlog(cfg.paths.baseline_backlog))
 
     reasoning_steps = [
         {
             "node_idx": 0,
             "wire_ids": ["w0"],
-            "agent": "🚦 PreToolUse Gate (hooks.json)",
+            "agent": "🚦 Stage 1: PreToolUse Gate (hooks.json)",
             "badge": "HOOK_CHECK • 8ms",
             "badge_color": "#f43f5e",
-            "thought": f"Intercepting pipeline request for '{latest.metadata.source_file}' via scripts/hooks/pre_tool_gate.py.",
-            "action": "Checked tool parameters against .agents/plugins/fde-backlog-kit/hooks.json security policy.",
+            "thought": f"Intercepting pipeline request for '{src_label}' in project '{cfg.project_title}' via scripts/hooks/pre_tool_gate.py.",
+            "action": "Verified tool parameters & file path boundaries against .agents/plugins/fde-backlog-kit/hooks.json security policy.",
             "delta": 'Hook Verdict: {"decision": "allow"} -> Forwarding execution to LangGraph Node 1 (ingest_node).',
         },
         {
             "node_idx": 1,
             "wire_ids": ["w0", "w4", "w5"],
-            "agent": "📥 Agent 1: ingest_node + PyPDF/PII + Stdio MCP",
+            "agent": "📥 Stage 2: ingest_node + PyPDF/PII + Stdio MCP",
             "badge": "INGEST & PII • 24ms",
             "badge_color": "#10a37f",
-            "thought": f"Extracting text from '{latest.metadata.source_file}' and scrubbing PII before external LLM calls.",
-            "action": f"Masked {latest.metadata.pii_redacted_count} PII item(s) and loaded {latest.metadata.existing_backlog_count} baseline issues (FIN-101..FIN-106) via fde-backlog-stdio.",
-            "delta": f"State updated: sha256='{latest.metadata.document_sha256}', pii_redacted={latest.metadata.pii_redacted_count}.",
+            "thought": f"Extracting text from '{src_label}' and scrubbing PII/secrets before external LLM calls.",
+            "action": f"Masked {latest.metadata.pii_redacted_count} PII item(s) and loaded {n_existing} baseline {id_pref} ticket(s) ({backlog_file}) via fde-backlog-stdio.",
+            "delta": f"State updated: sha256='{latest.metadata.document_sha256 or 'ready'}', pii_redacted={latest.metadata.pii_redacted_count}.",
         },
         {
             "node_idx": 2,
             "wire_ids": ["w1", "w2"],
-            "agent": f"🧠 Agent 2: extractor_agent ({ext_model})",
+            "agent": f"🧠 Stage 3: extractor_agent ({ext_model})",
             "badge": "COT EXTRACTION • $0.00022",
             "badge_color": "#9b72cb",
-            "thought": f"Decomposed document into {len(latest.stories)} structured stories and isolated {len(latest.summary.open_questions)} open questions.",
+            "thought": f"Decomposed requirements into {len(latest.stories)} structured {id_pref} work item(s) and isolated {len(latest.summary.open_questions)} open question(s).",
             "action": f"Executed ChatPromptTemplate | ChatOpenAI({ext_model}).with_structured_output(LLMExtractionPayload).",
-            "delta": f"Emitted {len(latest.stories)} GeneratedUserStory objects (all with >=3 testable ACs).",
+            "delta": f"Emitted {len(latest.stories)} schema-validated work item(s) (each with >={cfg.min_acceptance_criteria} testable acceptance criteria).",
         },
         {
             "node_idx": 3,
             "wire_ids": ["w2", "w3", "w6"],
-            "agent": f"🔍 Subagent 3: backlog-auditor ({aud_model})",
-            "badge": "DEDUPLICATION + MEMORY BANK • $0.00006",
+            "agent": f"🔍 Stage 4: backlog-auditor ({aud_model})",
+            "badge": "DEDUPLICATION + MEMORY • $0.00006",
             "badge_color": "#4285f4",
-            "thought": "Cross-referenced extracted stories against FIN-101..FIN-106 via fde-backlog-stdio MCP and loaded outputs/memory_bank.json session state.",
-            "action": "Classified stories (NEW, UPDATES_EXISTING, DUPLICATE, CONFLICT) and persisted Task CRUD + session context to Memory Bank.",
+            "thought": f"Cross-referenced extracted items against {n_existing} existing {id_pref} ticket(s) in {backlog_file} via fde-backlog-stdio MCP.",
+            "action": "Classified items (NEW, UPDATES_EXISTING, DUPLICATE, CONFLICT) and synced session state with Memory Bank.",
             "delta": "Attached related_backlog_ids, alignment_notes, and HITL risk policy gates.",
         },
         {
             "node_idx": 4,
             "wire_ids": ["w3", "w7"],
-            "agent": f"🛡️ Subagent 4: security-reviewer ({sec_model})",
+            "agent": f"🛡️ Stage 5: security-reviewer ({sec_model})",
             "badge": "HITL SECURITY GATE • $0.00008",
             "badge_color": "#e11d48",
-            "thought": "Audited P0 blast radius and PCI-DSS encryption conflicts using frontier model reasoning.",
-            "action": f"Flagged {sum(1 for s in latest.stories if s.requires_human_approval)} story(s) with requires_human_approval=True.",
-            "delta": "Persisted stories to Kanban Board and appended audit record to outputs/audit_trail.jsonl.",
+            "thought": f"Audited P0 blast radius and security/compliance conflicts for '{cfg.project_title}' using {sec_model}.",
+            "action": f"Flagged {sum(1 for s in latest.stories if s.requires_human_approval)} item(s) with requires_human_approval=True.",
+            "delta": f"Persisted approved items to {backlog_file} and appended immutable audit record to {audit_file}.",
         },
     ]
     steps_json = json.dumps(reasoning_steps)
@@ -3048,42 +3053,55 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
       <style>
         * {{ box-sizing: border-box; }}
         body {{
-          margin: 0; padding: 14px; font-family: 'Inter', sans-serif;
+          margin: 0; padding: 14px; font-family: 'Inter', -apple-system, sans-serif;
           background: #0a0a0a; color: #e3e3e3; border-radius: 16px;
         }}
         .top-bar {{
-          display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;
+          display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
         }}
         .btn-play {{
           background: #2563eb; color: #fff; border: none;
           padding: 8px 16px; border-radius: 999px; font-weight: 700; cursor: pointer; font-size: 12.5px;
         }}
+        .btn-play:hover {{ background: #3b82f6; }}
         .svg-box {{
-          background: #141414; border: 1px solid #262626; border-radius: 14px; padding: 8px; margin-bottom: 12px;
+          background: #141414; border: 1px solid #262626; border-radius: 14px; padding: 10px; margin-bottom: 12px;
         }}
-        svg {{ width: 100%; height: 345px; display: block; }}
+        svg {{ width: 100%; height: 335px; display: block; }}
         .node-box {{ cursor: pointer; }}
         .node-box.active rect.card {{ stroke: #3b82f6 !important; stroke-width: 4px !important; }}
         .wire {{ stroke-width: 2.5; fill: none; stroke-dasharray: 6 4; animation: dash 16s linear infinite; opacity: 0.45; }}
         .wire.active-wire {{ stroke: #3b82f6 !important; stroke-width: 4 !important; opacity: 1 !important; }}
         @keyframes dash {{ to {{ stroke-dashoffset: -200; }} }}
         .cot-box {{
-          background: #141414; border: 1px solid #2c2c2c; border-radius: 14px; padding: 12px 16px;
-          font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.55;
+          background: #141414; border: 1px solid #3b82f6; border-radius: 12px; padding: 12px 16px;
+          font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.55;
+          margin-bottom: 12px;
         }}
+        .stage-grid {{
+          display: grid; grid-template-columns: repeat(5, minmax(170px, 1fr)); gap: 8px;
+        }}
+        .stage-card {{
+          background: #141417; border: 1px solid #27272a; border-radius: 10px; padding: 10px 12px;
+          cursor: pointer; transition: border-color 0.15s, background 0.15s;
+        }}
+        .stage-card:hover {{ border-color: #52525b; background: #18181b; }}
+        .stage-card.active {{ border-color: #3b82f6; background: #172033; }}
+        .st-title {{ font-size: 11.5px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }}
+        .st-desc {{ font-size: 11px; color: #94a3b8; line-height: 1.4; }}
       </style>
     </head>
     <body>
       <div class="top-bar">
         <div>
-          <strong style="font-size:15px;">🕸️ Connected Agent, Subagent, Tool &amp; MCP Workflow Graph</strong>
-          <span style="font-size:12px; color:#9aa0a6; margin-left:8px;">Click any node or press Simulate Live Flow</span>
+          <strong style="font-size:15px;">🕸️ Connected Agent, Subagent, Tool &amp; MCP Workflow Graph — {html.escape(cfg.project_title)}</strong>
+          <span style="font-size:12px; color:#9aa0a6; margin-left:8px;">Click any node or stage card below, or press Simulate</span>
         </div>
         <button class="btn-play" onclick="playStream()">▶ Simulate Real-Time Execution &amp; Reasoning</button>
       </div>
 
       <div class="svg-box">
-        <svg viewBox="0 0 1180 340">
+        <svg viewBox="0 0 1180 330">
           <defs>
             <marker id="ar-p" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#9b72cb" />
@@ -3099,17 +3117,17 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
             </marker>
           </defs>
 
-          <path id="w0" class="wire" d="M 195 68 L 250 68" stroke="#f43f5e" marker-end="url(#ar-r)" />
-          <text x="222" y="58" fill="#fda4af" font-size="9.5" font-weight="700" text-anchor="middle">1. allow</text>
+          <path id="w0" class="wire" d="M 190 68 L 255 68" stroke="#f43f5e" marker-end="url(#ar-r)" />
+          <text x="222" y="14" fill="#fda4af" font-size="9.5" font-weight="700" text-anchor="middle">1. Hook Allow</text>
 
-          <path id="w1" class="wire" d="M 435 68 L 490 68" stroke="#9b72cb" marker-end="url(#ar-p)" />
-          <text x="462" y="58" fill="#e9d5ff" font-size="9.5" font-weight="700" text-anchor="middle">2. Clean Text</text>
+          <path id="w1" class="wire" d="M 435 68 L 495 68" stroke="#9b72cb" marker-end="url(#ar-p)" />
+          <text x="465" y="14" fill="#e9d5ff" font-size="9.5" font-weight="700" text-anchor="middle">2. Scrubbed Text</text>
 
-          <path id="w2" class="wire" d="M 675 68 L 730 68" stroke="#9b72cb" marker-end="url(#ar-p)" />
-          <text x="702" y="58" fill="#e9d5ff" font-size="9.5" font-weight="700" text-anchor="middle">3. Stories JSON</text>
+          <path id="w2" class="wire" d="M 675 68 L 735 68" stroke="#9b72cb" marker-end="url(#ar-p)" />
+          <text x="705" y="14" fill="#e9d5ff" font-size="9.5" font-weight="700" text-anchor="middle">3. Extracted JSON</text>
 
-          <path id="w3" class="wire" d="M 915 68 L 970 68" stroke="#9b72cb" marker-end="url(#ar-p)" />
-          <text x="942" y="58" fill="#e9d5ff" font-size="9.5" font-weight="700" text-anchor="middle">4. Deduped</text>
+          <path id="w3" class="wire" d="M 915 68 L 975 68" stroke="#9b72cb" marker-end="url(#ar-p)" />
+          <text x="945" y="14" fill="#e9d5ff" font-size="9.5" font-weight="700" text-anchor="middle">4. Audited Items</text>
 
           <path id="w4" class="wire" d="M 310 118 L 190 218" stroke="#10a37f" marker-start="url(#ar-g)" marker-end="url(#ar-g)" />
           <text x="215" y="172" fill="#6ee7b7" font-size="9.5" font-weight="700">⇄ PyPDF + PII</text>
@@ -3124,43 +3142,43 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           <text x="1065" y="172" fill="#6ee7b7" font-size="9.5" font-weight="700">⟶ Kanban &amp; JSONL</text>
 
           <g class="node-box" id="nd0" onclick="selectStep(0)">
-            <rect class="card" x="10" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#f43f5e" stroke-width="2.5"/>
-            <text x="20" y="42" fill="#fda4af" font-size="9.5" font-weight="700">HOOK (hooks.json)</text>
-            <text x="20" y="64" fill="#fff" font-size="12.5" font-weight="700">🚦 PreToolUse Gate</text>
-            <text x="20" y="82" fill="#9aa0a6" font-size="10">pre_tool_gate.py</text>
-            <text id="st0" x="20" y="102" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
+            <rect class="card" x="10" y="22" width="180" height="96" rx="11" fill="#0d0d0d" stroke="#f43f5e" stroke-width="2.5"/>
+            <text x="20" y="44" fill="#fda4af" font-size="9.5" font-weight="700">HOOK (hooks.json)</text>
+            <text x="20" y="66" fill="#fff" font-size="12.5" font-weight="700">🚦 PreToolUse Gate</text>
+            <text x="20" y="84" fill="#9aa0a6" font-size="10">pre_tool_gate.py</text>
+            <text id="st0" x="20" y="104" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
           </g>
 
           <g class="node-box" id="nd1" onclick="selectStep(1)">
-            <rect class="card" x="250" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
-            <text x="260" y="42" fill="#d8b4fe" font-size="9.5" font-weight="700">AGENT 1 (LANGGRAPH)</text>
-            <text x="260" y="64" fill="#fff" font-size="12.5" font-weight="700">📥 ingest_node</text>
-            <text x="260" y="82" fill="#9aa0a6" font-size="10">SHA-256 + PII Scrub</text>
-            <text id="st1" x="260" y="102" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
+            <rect class="card" x="255" y="22" width="180" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
+            <text x="265" y="44" fill="#d8b4fe" font-size="9.5" font-weight="700">AGENT 1 (LANGGRAPH)</text>
+            <text x="265" y="66" fill="#fff" font-size="12.5" font-weight="700">📥 ingest_node</text>
+            <text x="265" y="84" fill="#9aa0a6" font-size="10">SHA-256 + PII Scrub</text>
+            <text id="st1" x="265" y="104" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
           </g>
 
           <g class="node-box" id="nd2" onclick="selectStep(2)">
-            <rect class="card" x="490" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
-            <text x="500" y="42" fill="#d8b4fe" font-size="9.5" font-weight="700">AGENT 2 ({ext_model})</text>
-            <text x="500" y="64" fill="#fff" font-size="12.5" font-weight="700">🧠 extractor_agent</text>
-            <text x="500" y="82" fill="#9aa0a6" font-size="10">CoT Story Synthesis</text>
-            <text id="st2" x="500" y="102" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
+            <rect class="card" x="495" y="22" width="180" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
+            <text x="505" y="44" fill="#d8b4fe" font-size="9.5" font-weight="700">AGENT 2 ({ext_model})</text>
+            <text x="505" y="66" fill="#fff" font-size="12.5" font-weight="700">🧠 extractor_agent</text>
+            <text x="505" y="84" fill="#9aa0a6" font-size="10">CoT {id_pref} Synthesis</text>
+            <text id="st2" x="505" y="104" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
           </g>
 
           <g class="node-box" id="nd3" onclick="selectStep(3)">
-            <rect class="card" x="730" y="20" width="185" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
-            <text x="740" y="42" fill="#d8b4fe" font-size="9.5" font-weight="700">SUBAGENT ({aud_model})</text>
-            <text x="740" y="64" fill="#fff" font-size="12.5" font-weight="700">🔍 backlog-auditor</text>
-            <text x="740" y="82" fill="#9aa0a6" font-size="10">Dedup vs FIN-101..106</text>
-            <text id="st3" x="740" y="102" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
+            <rect class="card" x="735" y="22" width="180" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
+            <text x="745" y="44" fill="#d8b4fe" font-size="9.5" font-weight="700">SUBAGENT ({aud_model})</text>
+            <text x="745" y="66" fill="#fff" font-size="12.5" font-weight="700">🔍 backlog-auditor</text>
+            <text x="745" y="84" fill="#9aa0a6" font-size="10">Dedup vs {id_pref} ({n_existing} items)</text>
+            <text id="st3" x="745" y="104" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
           </g>
 
           <g class="node-box" id="nd4" onclick="selectStep(4)">
-            <rect class="card" x="970" y="20" width="195" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
-            <text x="980" y="42" fill="#fda4af" font-size="9.5" font-weight="700">SUBAGENT ({sec_model})</text>
-            <text x="980" y="64" fill="#fff" font-size="12.5" font-weight="700">🛡️ security-reviewer</text>
-            <text x="980" y="82" fill="#9aa0a6" font-size="10">P0 &amp; PCI HITL Gate</text>
-            <text id="st4" x="980" y="102" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
+            <rect class="card" x="975" y="22" width="190" height="96" rx="11" fill="#0d0d0d" stroke="#9b72cb" stroke-width="2.5"/>
+            <text x="985" y="44" fill="#fda4af" font-size="9.5" font-weight="700">SUBAGENT ({sec_model})</text>
+            <text x="985" y="66" fill="#fff" font-size="12.5" font-weight="700">🛡️ security-reviewer</text>
+            <text x="985" y="84" fill="#9aa0a6" font-size="10">P0 &amp; Policy HITL Gate</text>
+            <text id="st4" x="985" y="104" fill="#10a37f" font-size="9.5" font-weight="700">✅ Ready</text>
           </g>
 
           <g class="node-box" onclick="selectStep(1)">
@@ -3174,7 +3192,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
             <rect class="card" x="315" y="220" width="235" height="92" rx="11" fill="#0d0d0d" stroke="#4285f4" stroke-width="2"/>
             <text x="327" y="242" fill="#8ab4f8" font-size="9.5" font-weight="700">STDIO MCP SERVER</text>
             <text x="327" y="264" fill="#fff" font-size="12" font-weight="700">🔌 fde-backlog-stdio</text>
-            <text x="327" y="284" fill="#9aa0a6" font-size="10">Loads existing_backlog.json</text>
+            <text x="327" y="284" fill="#9aa0a6" font-size="10">Loads {backlog_file}</text>
           </g>
 
           <g class="node-box" onclick="selectStep(3)">
@@ -3187,17 +3205,31 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           <g class="node-box" onclick="selectStep(4)">
             <rect class="card" x="875" y="220" width="285" height="92" rx="11" fill="#0d0d0d" stroke="#10a37f" stroke-width="2"/>
             <text x="887" y="242" fill="#6ee7b7" font-size="9.5" font-weight="700">OUTPUT &amp; AUDIT SINK</text>
-            <text x="887" y="264" fill="#fff" font-size="12" font-weight="700">📋 Kanban + audit_trail.jsonl</text>
-            <text x="887" y="284" fill="#9aa0a6" font-size="10">Persists Stories, Costs &amp; Alerts</text>
+            <text x="887" y="264" fill="#fff" font-size="12" font-weight="700">📋 Kanban + {audit_file}</text>
+            <text x="887" y="284" fill="#9aa0a6" font-size="10">Persists {id_pref} Tasks, Costs &amp; Alerts</text>
           </g>
         </svg>
       </div>
 
       <div class="cot-box" id="node-inspector"></div>
 
+      <div class="stage-grid" id="stage-cards"></div>
+
       <script>
         const steps = {steps_json};
         let timer = null;
+
+        function renderStageCards(activeIdx) {{
+          document.getElementById('stage-cards').innerHTML = steps.map((s, idx) => `
+            <div class="stage-card ${{idx === activeIdx ? 'active' : ''}}" onclick="selectStep(${{idx}})">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <span style="font-size:10px; font-weight:700; color:${{s.badge_color}};">${{s.badge}}</span>
+              </div>
+              <div class="st-title">${{s.agent}}</div>
+              <div class="st-desc">${{s.thought}}</div>
+            </div>
+          `).join('');
+        }}
 
         function selectStep(idx) {{
           document.querySelectorAll('.node-box').forEach(el => el.classList.remove('active'));
@@ -3210,7 +3242,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
           }});
           const s = steps[idx];
           document.getElementById('node-inspector').innerHTML = `
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
               <strong style="color:#fff; font-size:13.5px;">${{s.agent}}</strong>
               <span style="background:${{s.badge_color}}; color:#fff; padding:2px 8px; border-radius:6px; font-size:10.5px; font-weight:700;">${{s.badge}}</span>
             </div>
@@ -3218,6 +3250,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
             <div style="margin-bottom:4px;"><strong style="color:#10a37f;">[ACTION / TOOL]</strong> ${{s.action}}</div>
             <div><strong style="color:#fcd34d;">[STATE DELTA]</strong> ${{s.delta}}</div>
           `;
+          renderStageCards(idx);
         }}
 
         function playStream() {{
@@ -3235,7 +3268,7 @@ def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysi
     </body>
     </html>
     """
-    components.html(graph_html, height=530)
+    components.html(graph_html, height=690, scrolling=True)
 
 
 def render_clear_finops_section(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
