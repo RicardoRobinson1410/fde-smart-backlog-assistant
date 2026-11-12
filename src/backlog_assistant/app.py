@@ -1385,9 +1385,16 @@ def render_chatgpt_conversational_first_tab(
 
 
 def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
-    """Tab 2: Dedicated Interactive Click-a-Card Kanban Board with Sticky Ticket Detail & Reasoning Drawer."""
+    """Tab 2: Authentic Jira-Style Kanban Board with Drag-and-Drop, Search/Quick Filters, Epic Lozenges, Story Points, Issue Modal & Status Dropdown."""
     existing_backlog = load_existing_backlog(cfg.paths.baseline_backlog)
     cards_data: list[dict[str, Any]] = []
+
+    assignee_map = {
+        "CONFLICT": {"name": "Security Reviewer", "initials": "SR", "color": "#e11d48"},
+        "DUPLICATE": {"name": "Backlog Auditor", "initials": "BA", "color": "#8b5cf6"},
+        "UPDATES_EXISTING": {"name": "Backlog Auditor", "initials": "BA", "color": "#d97706"},
+        "NEW": {"name": "Extractor Agent", "initials": "EA", "color": "#0c66e4"},
+    }
 
     for s in latest.stories:
         if s.requires_human_approval:
@@ -1401,15 +1408,19 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
 
         align_str = getattr(s.backlog_alignment, "value", str(s.backlog_alignment))
         cat_str = getattr(s.category, "value", str(s.category))
+        issue_type = "bug" if align_str == "CONFLICT" else ("task" if cat_str in ("security", "compliance") else "story")
+        assignee = assignee_map.get(align_str, {"name": "FDE Agent", "initials": "FA", "color": "#0c66e4"})
 
         cards_data.append({
             "id": s.id,
             "title": s.title,
             "column": col_key,
+            "issue_type": issue_type,
             "alignment": align_str,
             "priority": s.priority,
             "points": s.story_points,
-            "category": cat_str,
+            "category": cat_str.replace("_", " ").upper(),
+            "assignee": assignee,
             "confidence": int(s.confidence_score * 100),
             "requires_hitl": s.requires_human_approval,
             "related_ids": s.related_backlog_ids,
@@ -1418,19 +1429,37 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             "priority_rationale": s.priority_rationale,
             "alignment_notes": s.alignment_notes,
             "acceptance_criteria": s.acceptance_criteria,
-            "cot_extractor": (
-                f"Synthesized user story with {len(s.acceptance_criteria)} testable acceptance criteria and sized at {s.story_points} Fibonacci points ({s.priority}: {s.priority_rationale})."
-            ),
-            "cot_auditor": (
-                f"Compared against FIN-101..FIN-106 -> Classified as {align_str}"
-                + (f" referencing {', '.join(s.related_backlog_ids)}. " if s.related_backlog_ids else " (net-new scope). ")
-                + s.alignment_notes
-            ),
-            "cot_security": (
-                f"FLAGGED FOR HUMAN-IN-THE-LOOP SIGN-OFF: Priority={s.priority}, Alignment={align_str}, Confidence={int(s.confidence_score*100)}%."
-                if s.requires_human_approval
-                else f"CLEARED BY SECURITY GATE: Non-conflicting {s.priority} scope ({int(s.confidence_score*100)}% confidence)."
-            ),
+            "comments": [
+                {
+                    "author": "Extractor Agent",
+                    "initials": "EA",
+                    "color": "#0c66e4",
+                    "time": "Just now",
+                    "text": f"Synthesized {len(s.acceptance_criteria)} testable acceptance criteria and estimated at {s.story_points} story points ({s.priority}: {s.priority_rationale}).",
+                },
+                {
+                    "author": "Backlog Auditor",
+                    "initials": "BA",
+                    "color": "#8b5cf6",
+                    "time": "Just now",
+                    "text": (
+                        f"Compared against FIN-101..FIN-106 -> Classified as {align_str}"
+                        + (f" referencing {', '.join(s.related_backlog_ids)}. " if s.related_backlog_ids else " (net-new scope). ")
+                        + s.alignment_notes
+                    ),
+                },
+                {
+                    "author": "Security Reviewer",
+                    "initials": "SR",
+                    "color": "#e11d48",
+                    "time": "Just now",
+                    "text": (
+                        f"HITL GATE REQUIRED: Priority={s.priority}, Alignment={align_str}, Confidence={int(s.confidence_score*100)}%."
+                        if s.requires_human_approval
+                        else f"SECURITY CLEARED: Non-conflicting {s.priority} scope ({int(s.confidence_score*100)}% confidence)."
+                    ),
+                },
+            ],
         })
 
     for b in existing_backlog:
@@ -1440,10 +1469,12 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
             "id": b.id,
             "title": b.title,
             "column": b_col,
-            "alignment": f"BASELINE ({b.status})",
+            "issue_type": "task",
+            "alignment": f"BASELINE",
             "priority": b.priority,
             "points": 3,
-            "category": "existing_backlog",
+            "category": "FINTECH BASELINE",
+            "assignee": {"name": "Platform Team", "initials": "PT", "color": "#059669"},
             "confidence": 100,
             "requires_hitl": False,
             "related_ids": [b.id],
@@ -1456,9 +1487,15 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
                 "Used by Subagent 3 (backlog-auditor) as ground-truth deduplication anchor.",
                 f"Current status: {b.status}.",
             ],
-            "cot_extractor": "Ground-truth baseline item loaded during Stage 1 (ingest_node).",
-            "cot_auditor": f"Used as comparison anchor ({b.id}: {b.title}).",
-            "cot_security": "Verified baseline backlog item.",
+            "comments": [
+                {
+                    "author": "MCP Server",
+                    "initials": "MC",
+                    "color": "#059669",
+                    "time": "Baseline",
+                    "text": f"Loaded {b.id} ({b.status}) from existing_backlog.json as deduplication anchor.",
+                }
+            ],
         })
 
     cards_json = json.dumps(cards_data)
@@ -1469,200 +1506,585 @@ def render_clickable_kanban_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResu
       <style>
         * {{ box-sizing: border-box; }}
         body {{
-          margin: 0; padding: 14px; font-family: 'Inter', sans-serif;
-          background: #0a0a0a; color: #e3e3e3; border-radius: 16px;
+          margin: 0; padding: 18px 22px;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+          background: #1D2125; color: #B6C2CF;
+          border-radius: 12px;
         }}
-        .kb-layout {{
-          display: grid; grid-template-columns: 1.85fr 1.15fr; gap: 16px; align-items: start;
-        }}
-        .kb-cols {{
-          display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
-        }}
-        .kb-col {{
-          background: #141414; border: 1px solid #262626; border-radius: 14px; padding: 10px;
-          min-height: 480px;
-        }}
-        .kb-col-hdr {{
-          padding: 8px 10px; border-radius: 9px; font-weight: 700; font-size: 11.5px;
-          text-align: center; margin-bottom: 10px; color: #fff; text-transform: uppercase;
-        }}
-        .h-todo {{ background: #10a37f; }}
-        .h-prog {{ background: #d97706; }}
-        .h-hitl {{ background: #e11d48; }}
-        .h-done {{ background: #6d28d9; }}
 
-        .kb-card {{
-          background: #1c1c1c; border: 1.5px solid #2e2e2e; border-top: 4px solid #10a37f;
-          border-radius: 12px; padding: 11px; margin-bottom: 9px; cursor: pointer;
-          transition: all 0.18s ease;
+        /* Jira Top Breadcrumb & Header */
+        .jira-breadcrumb {{
+          font-size: 12.5px; color: #8C9BAB; margin-bottom: 6px;
         }}
-        .kb-card:hover {{
-          transform: translateY(-2px); border-color: #3b82f6;
-          box-shadow: 0 6px 16px rgba(59, 130, 246, 0.2);
+        .jira-breadcrumb span:hover {{ text-decoration: underline; cursor: pointer; }}
+        .jira-header-row {{
+          display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;
         }}
-        .kb-card.selected-card {{
-          border-color: #3b82f6 !important; background: #172033 !important;
-          box-shadow: 0 0 16px rgba(59, 130, 246, 0.45);
+        .jira-title {{
+          font-size: 22px; font-weight: 600; color: #DEE4EA; margin: 0; letter-spacing: -0.01em;
         }}
-        .kb-card.c-prog {{ border-top-color: #f59e0b; }}
-        .kb-card.c-hitl {{ border-top-color: #f43f5e; }}
-        .kb-card.c-done {{ border-top-color: #8b5cf6; }}
+        .jira-primary-btn {{
+          background: #579DFF; color: #1D2125; border: none; border-radius: 4px;
+          padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+        }}
+        .jira-primary-btn:hover {{ background: #85B8FF; }}
 
-        .badge {{
-          display: inline-block; padding: 2px 7px; border-radius: 99px;
-          font-size: 10px; font-weight: 700; margin-right: 4px; margin-bottom: 4px;
+        /* Jira Toolbar: Search + Avatars + Quick Filters */
+        .jira-toolbar {{
+          display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px;
         }}
-        .b-green {{ background: rgba(16,163,127,0.25); color: #6ee7b7; }}
-        .b-amber {{ background: rgba(245,158,11,0.25); color: #fcd34d; }}
-        .b-red {{ background: rgba(225,29,72,0.25); color: #fda4af; }}
-        .b-purple {{ background: rgba(139,92,246,0.25); color: #ddd6fe; }}
-        .b-cyan {{ background: rgba(59,130,246,0.25); color: #93c5fd; }}
+        .jira-search-wrap {{
+          position: relative; width: 210px;
+        }}
+        .jira-search {{
+          width: 100%; background: #22272B; border: 1px solid #738496; border-radius: 4px;
+          padding: 6px 10px 6px 30px; color: #DEE4EA; font-size: 13px; outline: none;
+        }}
+        .jira-search:focus {{ border-color: #579DFF; background: #1D2125; }}
+        .jira-search-icon {{
+          position: absolute; left: 9px; top: 7px; font-size: 13px; color: #8C9BAB;
+        }}
 
-        .detail-drawer {{
-          background: #141414; border: 1.5px solid #3b82f6; border-radius: 16px;
-          padding: 16px; position: sticky; top: 10px;
+        .avatar-stack {{
+          display: flex; align-items: center;
         }}
-        .drawer-sec {{
-          background: #0d0d0d; border: 1px solid #262626;
-          border-radius: 10px; padding: 10px 12px; margin-top: 10px; font-size: 12px; line-height: 1.55;
+        .avatar-filter {{
+          width: 30px; height: 30px; border-radius: 50%; border: 2px solid #1D2125;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 11px; font-weight: 700; color: #fff; cursor: pointer;
+          margin-left: -4px; transition: transform 0.12s, box-shadow 0.12s;
         }}
-        .drawer-lbl {{
-          font-size: 10.5px; font-weight: 700; color: #93c5fd; text-transform: uppercase;
-          letter-spacing: 0.05em; margin-bottom: 4px;
+        .avatar-filter:first-child {{ margin-left: 0; }}
+        .avatar-filter:hover {{ transform: translateY(-2px); z-index: 2; }}
+        .avatar-filter.active {{ box-shadow: 0 0 0 2px #579DFF; z-index: 3; }}
+
+        .qf-btn {{
+          background: transparent; border: none; color: #B6C2CF; font-size: 13px; font-weight: 500;
+          padding: 6px 10px; border-radius: 4px; cursor: pointer;
         }}
-        .hitl-btn {{
-          padding: 6px 11px; border-radius: 8px; border: none; font-weight: 700;
-          font-size: 11px; cursor: pointer; margin-right: 5px; color: #fff;
+        .qf-btn:hover {{ background: #2C333A; color: #DEE4EA; }}
+        .qf-btn.active {{ background: #1C2B41; color: #579DFF; font-weight: 600; }}
+
+        /* Jira Board Columns */
+        .jira-board {{
+          display: grid; grid-template-columns: repeat(4, minmax(230px, 1fr)); gap: 12px; align-items: start;
         }}
+        .jira-col {{
+          background: #161A1D; border-radius: 6px; padding: 8px; min-height: 520px;
+          transition: background 0.15s;
+        }}
+        .jira-col.drag-over {{
+          background: #1C2B41; outline: 2px dashed #579DFF;
+        }}
+        .jira-col-hdr {{
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 6px 8px 10px 8px; font-size: 12px; font-weight: 600;
+          color: #9FADBC; text-transform: uppercase; letter-spacing: 0.03em;
+        }}
+        .col-count {{
+          background: #2C333A; color: #B6C2CF; border-radius: 999px;
+          padding: 1px 7px; font-size: 11px; font-weight: 600; margin-left: 6px;
+        }}
+
+        /* Jira Issue Card */
+        .jira-card {{
+          background: #22272B; border-radius: 4px; padding: 11px 12px; margin-bottom: 8px;
+          box-shadow: 0 1px 1px rgba(9, 30, 66, 0.25), 0 0 1px rgba(9, 30, 66, 0.31);
+          cursor: grab; transition: background 0.12s, box-shadow 0.12s;
+          border: 1px solid transparent;
+        }}
+        .jira-card:hover {{
+          background: #282E33; border-color: #38414A;
+        }}
+        .jira-card.dragging {{ opacity: 0.5; }}
+        .jira-card-title {{
+          font-size: 13.5px; color: #DEE4EA; line-height: 1.4; margin-bottom: 8px; font-weight: 400;
+        }}
+        .jira-epic {{
+          display: inline-block; padding: 2px 6px; border-radius: 3px;
+          font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em;
+          margin-right: 4px; margin-bottom: 8px;
+        }}
+        .ep-purple {{ background: #352C63; color: #DFD8FD; }}
+        .ep-blue {{ background: #09326C; color: #CCE0FF; }}
+        .ep-teal {{ background: #164B35; color: #BAF3DB; }}
+        .ep-red {{ background: #5D1F1A; color: #FFD5D2; }}
+        .ep-amber {{ background: #533F04; color: #F8E6A0; }}
+
+        .jira-card-footer {{
+          display: flex; justify-content: space-between; align-items: center; margin-top: 4px;
+        }}
+        .jira-key-row {{
+          display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #9FADBC;
+        }}
+        .jira-meta-right {{
+          display: flex; align-items: center; gap: 7px;
+        }}
+        .sp-badge {{
+          background: #2C333A; color: #B6C2CF; border-radius: 999px;
+          min-width: 20px; height: 20px; padding: 0 6px;
+          font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
+        }}
+        .mini-avatar {{
+          width: 24px; height: 24px; border-radius: 50%;
+          display: inline-flex; align-items: center; justify-content: center;
+          font-size: 10px; font-weight: 700; color: #fff;
+        }}
+
+        /* Jira Issue Detail Modal */
+        .modal-backdrop {{
+          display: none; position: fixed; inset: 0; background: rgba(9, 12, 16, 0.78);
+          z-index: 200; align-items: center; justify-content: center; padding: 20px;
+        }}
+        .modal-backdrop.open {{ display: flex; }}
+        .jira-modal {{
+          background: #22272B; border: 1px solid #38414A; border-radius: 8px;
+          width: 100%; max-width: 920px; max-height: 600px; display: flex; flex-direction: column;
+          box-shadow: 0 18px 48px rgba(0, 0, 0, 0.75); overflow: hidden;
+        }}
+        .modal-topbar {{
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 12px 20px; border-bottom: 1px solid #2C333A; font-size: 13px; color: #9FADBC;
+        }}
+        .modal-close {{
+          background: transparent; border: none; color: #9FADBC; font-size: 18px;
+          cursor: pointer; padding: 4px 8px; border-radius: 4px;
+        }}
+        .modal-close:hover {{ background: #2C333A; color: #fff; }}
+        .modal-body {{
+          display: grid; grid-template-columns: 1.55fr 1fr; overflow-y: auto; flex: 1;
+        }}
+        .modal-left {{
+          padding: 20px 24px; border-right: 1px solid #2C333A; overflow-y: auto;
+        }}
+        .modal-right {{
+          padding: 18px 20px; background: #1D2125; overflow-y: auto;
+        }}
+        .status-select {{
+          background: #0C66E4; color: #fff; border: none; border-radius: 4px;
+          padding: 6px 12px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+          text-transform: uppercase; margin-bottom: 16px;
+        }}
+        .status-select.st-prog {{ background: #0C66E4; }}
+        .status-select.st-hitl {{ background: #AE2E24; }}
+        .status-select.st-done {{ background: #216E4E; }}
+        .status-select.st-todo {{ background: #44546F; }}
+
+        .detail-box {{
+          border: 1px solid #2C333A; border-radius: 6px; padding: 12px 14px; background: #22272B;
+        }}
+        .detail-row {{
+          display: grid; grid-template-columns: 110px 1fr; align-items: center;
+          padding: 7px 0; font-size: 12.5px; border-bottom: 1px solid #2C333A;
+        }}
+        .detail-row:last-child {{ border-bottom: none; }}
+        .detail-lbl {{ color: #8C9BAB; font-weight: 600; }}
+
+        .ac-item {{
+          display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px;
+          background: #1D2125; border-radius: 4px; margin-bottom: 6px; font-size: 12.5px; color: #DEE4EA;
+        }}
+        .comment-card {{
+          display: flex; gap: 10px; margin-top: 12px; font-size: 12.5px;
+        }}
+        .comment-input {{
+          width: 100%; background: #1D2125; border: 1px solid #38414A; border-radius: 4px;
+          padding: 8px 10px; color: #DEE4EA; font-size: 12.5px; margin-top: 8px; outline: none;
+        }}
+        .comment-input:focus {{ border-color: #579DFF; }}
       </style>
     </head>
     <body>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div>
-          <strong style="font-size:15px;">📋 Interactive Kanban Board — <span style="color:#93c5fd;">Click Any Card to Inspect Details &amp; Agent Reasoning</span></strong>
+      <!-- Jira Breadcrumb & Title -->
+      <div class="jira-breadcrumb">
+        <span>Projects</span> / <span>FDE-FinTech</span> / <span>Smart Backlog Board</span>
+      </div>
+      <div class="jira-header-row">
+        <h1 class="jira-title">FDE Kanban board</h1>
+        <button class="jira-primary-btn" onclick="openCreateModal()">+ Create issue</button>
+      </div>
+
+      <!-- Jira Filter & Quick-Filter Toolbar -->
+      <div class="jira-toolbar">
+        <div class="jira-search-wrap">
+          <span class="jira-search-icon">🔍</span>
+          <input type="text" id="jira-search" class="jira-search" placeholder="Search this board" oninput="renderBoard()" />
+        </div>
+        <div class="avatar-stack" id="avatar-filters"></div>
+        <button class="qf-btn" id="qf-p0" onclick="toggleQuickFilter('p0')">P0 Critical</button>
+        <button class="qf-btn" id="qf-hitl" onclick="toggleQuickFilter('hitl')">HITL Gate</button>
+        <button class="qf-btn" id="qf-conflict" onclick="toggleQuickFilter('conflict')">Conflicts Only</button>
+        <button class="qf-btn" onclick="clearAllFilters()" style="color:#8C9BAB;">Clear filters</button>
+      </div>
+
+      <!-- 4-Column Jira Board with HTML5 Drag & Drop -->
+      <div class="jira-board">
+        <div class="jira-col" data-col="todo" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'todo')">
+          <div class="jira-col-hdr">
+            <span>TO DO <span class="col-count" id="cnt-todo">0</span></span>
+          </div>
+          <div id="col-todo"></div>
+        </div>
+
+        <div class="jira-col" data-col="prog" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'prog')">
+          <div class="jira-col-hdr">
+            <span>IN PROGRESS <span class="col-count" id="cnt-prog">0</span></span>
+          </div>
+          <div id="col-prog"></div>
+        </div>
+
+        <div class="jira-col" data-col="hitl" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'hitl')">
+          <div class="jira-col-hdr">
+            <span>IN REVIEW / HITL <span class="col-count" id="cnt-hitl">0</span></span>
+          </div>
+          <div id="col-hitl"></div>
+        </div>
+
+        <div class="jira-col" data-col="done" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, 'done')">
+          <div class="jira-col-hdr">
+            <span>DONE <span class="col-count" id="cnt-done">0</span></span>
+          </div>
+          <div id="col-done"></div>
         </div>
       </div>
 
-      <div class="kb-layout">
-        <div class="kb-cols">
-          <div class="kb-col">
-            <div class="kb-col-hdr h-todo">📌 1. To Do / Net-New</div>
-            <div id="col-todo"></div>
+      <!-- Authentic Jira Issue Detail Modal -->
+      <div class="modal-backdrop" id="issue-modal" onclick="if(event.target===this) closeIssueModal()">
+        <div class="jira-modal" id="issue-modal-content"></div>
+      </div>
+
+      <!-- Create Issue Modal -->
+      <div class="modal-backdrop" id="create-modal" onclick="if(event.target===this) closeCreateModal()">
+        <div class="jira-modal" style="max-width:520px; padding:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+            <strong style="font-size:16px; color:#DEE4EA;">Create Issue</strong>
+            <button class="modal-close" onclick="closeCreateModal()">✕</button>
           </div>
-          <div class="kb-col">
-            <div class="kb-col-hdr h-prog">🔄 2. Scope Updates</div>
-            <div id="col-prog"></div>
+          <label style="font-size:12px; color:#9FADBC; font-weight:600;">Summary *</label>
+          <input id="new-title" class="comment-input" style="margin-bottom:12px;" placeholder="e.g. Implement Apple Pay Biometric Auth" />
+          <label style="font-size:12px; color:#9FADBC; font-weight:600;">User Story / Description</label>
+          <textarea id="new-desc" class="comment-input" rows="3" style="margin-bottom:12px;" placeholder="As a FinTech user, I want..."></textarea>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px;">
+            <div>
+              <label style="font-size:12px; color:#9FADBC; font-weight:600;">Priority</label>
+              <select id="new-pri" class="comment-input">
+                <option value="P0 - Critical">P0 - Critical</option>
+                <option value="P1 - High" selected>P1 - High</option>
+                <option value="P2 - Medium">P2 - Medium</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:12px; color:#9FADBC; font-weight:600;">Story Points</label>
+              <select id="new-pts" class="comment-input">
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="5" selected>5</option>
+                <option value="8">8</option>
+              </select>
+            </div>
           </div>
-          <div class="kb-col">
-            <div class="kb-col-hdr h-hitl">🚨 3. HITL Review Gate</div>
-            <div id="col-hitl"></div>
-          </div>
-          <div class="kb-col">
-            <div class="kb-col-hdr h-done">🛑 4. Blocked Dup / Done</div>
-            <div id="col-done"></div>
+          <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button class="qf-btn" onclick="closeCreateModal()">Cancel</button>
+            <button class="jira-primary-btn" onclick="submitNewIssue()">Create</button>
           </div>
         </div>
-        <div class="detail-drawer" id="card-inspector"></div>
       </div>
 
       <script>
         const cardsData = {cards_json};
-        let selectedCardId = cardsData.length > 0 ? cardsData[0].id : null;
+        let activeQuickFilter = null;
+        let activeAssignee = null;
+        let draggedCardId = null;
 
-        function renderKanbanBoard() {{
+        function issueIconSvg(type) {{
+          if (type === 'bug') {{
+            return `<span title="Conflict / Bug" style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:3px;background:#E34935;color:#fff;font-size:10px;font-weight:900;">!</span>`;
+          }}
+          if (type === 'task') {{
+            return `<span title="Task" style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:3px;background:#4BADE8;color:#fff;font-size:10px;font-weight:900;">✓</span>`;
+          }}
+          return `<span title="User Story" style="display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:3px;background:#63BA3C;color:#fff;font-size:10px;font-weight:900;">🔖</span>`;
+        }}
+
+        function priorityIcon(pri) {{
+          if (pri.includes('P0')) return `<span title="${{pri}}" style="color:#F87168;font-weight:900;font-size:13px;">⬆</span>`;
+          if (pri.includes('P1')) return `<span title="${{pri}}" style="color:#FEA362;font-weight:900;font-size:13px;">↑</span>`;
+          return `<span title="${{pri}}" style="color:#F5CD47;font-weight:900;font-size:13px;">=</span>`;
+        }}
+
+        function epicClass(cat, align) {{
+          if (align === 'CONFLICT') return 'ep-red';
+          if (align === 'DUPLICATE') return 'ep-purple';
+          if (align === 'UPDATES_EXISTING') return 'ep-amber';
+          if (cat.includes('BASELINE')) return 'ep-teal';
+          return 'ep-blue';
+        }}
+
+        function renderAvatarFilters() {{
+          const seen = {{}};
+          cardsData.forEach(c => {{ seen[c.assignee.initials] = c.assignee; }});
+          const html = Object.values(seen).map(a => `
+            <div class="avatar-filter ${{activeAssignee === a.initials ? 'active' : ''}}"
+                 style="background:${{a.color}};"
+                 title="Filter by ${{a.name}}"
+                 onclick="toggleAssigneeFilter('${{a.initials}}')">${{a.initials}}</div>
+          `).join('');
+          document.getElementById('avatar-filters').innerHTML = html;
+        }}
+
+        function toggleAssigneeFilter(initials) {{
+          activeAssignee = (activeAssignee === initials) ? null : initials;
+          renderAvatarFilters();
+          renderBoard();
+        }}
+
+        function toggleQuickFilter(key) {{
+          activeQuickFilter = (activeQuickFilter === key) ? null : key;
+          ['p0', 'hitl', 'conflict'].forEach(k => {{
+            document.getElementById('qf-' + k).classList.toggle('active', activeQuickFilter === k);
+          }});
+          renderBoard();
+        }}
+
+        function clearAllFilters() {{
+          activeQuickFilter = null;
+          activeAssignee = null;
+          document.getElementById('jira-search').value = '';
+          ['p0', 'hitl', 'conflict'].forEach(k => document.getElementById('qf-' + k).classList.remove('active'));
+          renderAvatarFilters();
+          renderBoard();
+        }}
+
+        function renderBoard() {{
+          const q = (document.getElementById('jira-search').value || '').toLowerCase().trim();
           const cols = {{ todo: '', prog: '', hitl: '', done: '' }};
+          const counts = {{ todo: 0, prog: 0, hitl: 0, done: 0 }};
+
           cardsData.forEach(c => {{
-            const isSel = c.id === selectedCardId ? 'selected-card' : '';
-            const colCls = 'c-' + c.column;
-            const badgeCls = c.column === 'hitl' ? 'b-red' : (c.column === 'prog' ? 'b-amber' : (c.column === 'done' ? 'b-purple' : 'b-green'));
-            const refs = c.related_ids && c.related_ids.length > 0 ? ` (${{c.related_ids.join(', ')}})` : '';
+            if (q && !(c.id + ' ' + c.title + ' ' + c.category + ' ' + c.alignment).toLowerCase().includes(q)) return;
+            if (activeAssignee && c.assignee.initials !== activeAssignee) return;
+            if (activeQuickFilter === 'p0' && !c.priority.includes('P0')) return;
+            if (activeQuickFilter === 'hitl' && !c.requires_hitl) return;
+            if (activeQuickFilter === 'conflict' && c.alignment !== 'CONFLICT') return;
+
+            counts[c.column]++;
+            const epCls = epicClass(c.category, c.alignment);
+            const refs = (c.related_ids && c.related_ids.length && c.alignment !== 'BASELINE') ? ` • ${{c.related_ids.join(', ')}}` : '';
             cols[c.column] += `
-              <div class="kb-card ${{colCls}} ${{isSel}}" onclick="selectKanbanCard('${{c.id}}')">
+              <div class="jira-card"
+                   draggable="true"
+                   ondragstart="onDragStart(event, '${{c.id}}')"
+                   ondragend="onDragEnd(event)"
+                   onclick="openIssueModal('${{c.id}}')">
+                <div class="jira-card-title">${{c.title}}</div>
                 <div>
-                  <span class="badge ${{badgeCls}}">${{c.alignment}}${{refs}}</span>
-                  <span class="badge b-cyan">${{c.priority}} • ${{c.points}} pts</span>
+                  <span class="jira-epic ${{epCls}}">${{c.category}}${{refs}}</span>
+                  ${{c.alignment === 'CONFLICT' ? '<span class="jira-epic ep-red">CONFLICT</span>' : ''}}
+                  ${{c.requires_hitl ? '<span class="jira-epic ep-red">HITL</span>' : ''}}
                 </div>
-                <div style="font-weight:700; font-size:13px; color:#fff; margin-top:4px;">${{c.id}}: ${{c.title}}</div>
-                <div style="font-size:11px; color:#9aa0a6; margin-top:5px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
-                  ${{c.user_story}}
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:10.5px; color:#93c5fd; font-weight:600;">
-                  <span>✓ ${{c.acceptance_criteria.length}} ACs</span>
-                  <span>Click to open →</span>
+                <div class="jira-card-footer">
+                  <div class="jira-key-row">
+                    ${{issueIconSvg(c.issue_type)}}
+                    <span>${{c.id}}</span>
+                  </div>
+                  <div class="jira-meta-right">
+                    ${{priorityIcon(c.priority)}}
+                    <span class="sp-badge" title="Story Points">${{c.points}}</span>
+                    <span class="mini-avatar" style="background:${{c.assignee.color}};" title="${{c.assignee.name}}">${{c.assignee.initials}}</span>
+                  </div>
                 </div>
               </div>
             `;
           }});
-          document.getElementById('col-todo').innerHTML = cols.todo || '<div style="color:#64748b; font-size:11.5px; text-align:center; padding:18px;">No tickets</div>';
-          document.getElementById('col-prog').innerHTML = cols.prog || '<div style="color:#64748b; font-size:11.5px; text-align:center; padding:18px;">No tickets</div>';
-          document.getElementById('col-hitl').innerHTML = cols.hitl || '<div style="color:#10a37f; font-size:11.5px; text-align:center; padding:18px;">✅ 0 tickets waiting</div>';
-          document.getElementById('col-done').innerHTML = cols.done || '<div style="color:#64748b; font-size:11.5px; text-align:center; padding:18px;">No tickets</div>';
+
+          ['todo', 'prog', 'hitl', 'done'].forEach(k => {{
+            document.getElementById('col-' + k).innerHTML = cols[k] || '<div style="color:#596773; font-size:12px; text-align:center; padding:24px 8px;">No issues</div>';
+            document.getElementById('cnt-' + k).innerText = counts[k];
+          }});
         }}
 
-        function selectKanbanCard(cardId) {{
-          selectedCardId = cardId;
-          renderKanbanBoard();
-          const c = cardsData.find(item => item.id === cardId);
-          if (!c) return;
+        // HTML5 Drag & Drop
+        function onDragStart(ev, cardId) {{
+          draggedCardId = cardId;
+          ev.currentTarget.classList.add('dragging');
+          ev.dataTransfer.setData('text/plain', cardId);
+        }}
+        function onDragEnd(ev) {{
+          ev.currentTarget.classList.remove('dragging');
+          document.querySelectorAll('.jira-col').forEach(col => col.classList.remove('drag-over'));
+        }}
+        function onDragOver(ev) {{
+          ev.preventDefault();
+          ev.currentTarget.classList.add('drag-over');
+        }}
+        function onDragLeave(ev) {{
+          ev.currentTarget.classList.remove('drag-over');
+        }}
+        function onDrop(ev, targetCol) {{
+          ev.preventDefault();
+          ev.currentTarget.classList.remove('drag-over');
+          const id = draggedCardId || ev.dataTransfer.getData('text/plain');
+          const c = cardsData.find(x => x.id === id);
+          if (c) {{
+            c.column = targetCol;
+            renderBoard();
+          }}
+          draggedCardId = null;
+        }}
 
-          const acListHtml = c.acceptance_criteria.map((ac, i) => `
-            <div style="margin-bottom:5px;">
-              <span style="color:#10a37f; font-weight:700;">☑ AC #${{i+1}}:</span> ${{ac}}
+        // Jira Issue Detail Modal
+        function openIssueModal(cardId) {{
+          const c = cardsData.find(x => x.id === cardId);
+          if (!c) return;
+          const stClass = 'st-' + c.column;
+          const acHtml = c.acceptance_criteria.map((ac, idx) => `
+            <div class="ac-item">
+              <input type="checkbox" checked style="margin-top:3px; accent-color:#579DFF;" />
+              <span><strong>AC-${{idx+1}}:</strong> ${{ac}}</span>
             </div>
           `).join('');
 
-          const hitlActions = `
-            <div style="margin-top:8px;">
-              <button class="hitl-btn" style="background:#10a37f;" onclick="moveCard('${{c.id}}', 'todo', 'APPROVED READY')">✅ Move to To-Do</button>
-              <button class="hitl-btn" style="background:#d97706;" onclick="moveCard('${{c.id}}', 'prog', 'IN PROGRESS')">🔄 Move to Updates</button>
-              <button class="hitl-btn" style="background:#e11d48;" onclick="moveCard('${{c.id}}', 'hitl', 'HITL GATE')">🚨 Flag HITL</button>
-              <button class="hitl-btn" style="background:#6d28d9;" onclick="moveCard('${{c.id}}', 'done', 'DONE / BLOCKED')">🛑 Move to Done</button>
+          const commentsHtml = c.comments.map(cm => `
+            <div class="comment-card">
+              <span class="mini-avatar" style="background:${{cm.color}}; flex-shrink:0;">${{cm.initials}}</span>
+              <div>
+                <div style="font-weight:600; color:#DEE4EA;">${{cm.author}} <span style="font-weight:400; color:#8C9BAB; font-size:11px; margin-left:6px;">${{cm.time}}</span></div>
+                <div style="color:#B6C2CF; margin-top:3px; line-height:1.45;">${{cm.text}}</div>
+              </div>
             </div>
-          `;
+          `).join('');
 
-          document.getElementById('card-inspector').innerHTML = `
-            <div>
-              <span class="badge b-cyan">${{c.id}}</span>
-              <span class="badge b-purple">${{c.alignment}}</span>
-              <span class="badge b-amber">${{c.priority}} • ${{c.points}} Pts</span>
-              <span class="badge b-green">Confidence: ${{c.confidence}}%</span>
+          document.getElementById('issue-modal-content').innerHTML = `
+            <div class="modal-topbar">
+              <div style="display:flex; align-items:center; gap:8px;">
+                ${{issueIconSvg(c.issue_type)}}
+                <span>FDE-FinTech</span> / <strong style="color:#DEE4EA;">${{c.id}}</strong>
+              </div>
+              <button class="modal-close" onclick="closeIssueModal()">✕</button>
             </div>
-            <div style="font-size:15.5px; font-weight:700; color:#fff; margin-top:6px;">${{c.id}}: ${{c.title}}</div>
-            ${{hitlActions}}
-            <div class="drawer-sec">
-              <div class="drawer-lbl">📖 User Story &amp; Technical Implementation Spec</div>
-              <div style="font-style:italic; color:#e3e3e3; margin-bottom:6px;">"${{c.user_story}}"</div>
-              <div style="color:#9aa0a6;"><strong>Technical Spec:</strong> ${{c.technical_description}}</div>
-            </div>
-            <div class="drawer-sec">
-              <div class="drawer-lbl">✅ Testable Acceptance Criteria (${{c.acceptance_criteria.length}} Criteria)</div>
-              ${{acListHtml}}
-            </div>
-            <div class="drawer-sec">
-              <div class="drawer-lbl">✨ Agent Reasoning Trace for ${{c.id}}</div>
-              <div style="margin-bottom:5px;"><strong style="color:#93c5fd;">• Extractor Agent:</strong> ${{c.cot_extractor}}</div>
-              <div style="margin-bottom:5px;"><strong style="color:#fcd34d;">• Backlog Auditor:</strong> ${{c.cot_auditor}}</div>
-              <div><strong style="color:#fda4af;">• Security Reviewer:</strong> ${{c.cot_security}}</div>
+            <div class="modal-body">
+              <div class="modal-left">
+                <h2 style="font-size:19px; color:#DEE4EA; margin:0 0 14px 0; line-height:1.35;">${{c.title}}</h2>
+                <div style="font-size:12.5px; font-weight:700; color:#DEE4EA; margin-bottom:6px;">Description</div>
+                <div style="font-size:13px; color:#B6C2CF; line-height:1.55; margin-bottom:10px; font-style:italic;">"${{c.user_story}}"</div>
+                <div style="font-size:12.5px; color:#9FADBC; line-height:1.55; margin-bottom:18px;">${{c.technical_description}}</div>
+
+                <div style="font-size:12.5px; font-weight:700; color:#DEE4EA; margin-bottom:8px;">Acceptance Criteria (${{c.acceptance_criteria.length}})</div>
+                <div style="margin-bottom:18px;">${{acHtml}}</div>
+
+                <div style="font-size:12.5px; font-weight:700; color:#DEE4EA; margin-bottom:6px;">Activity &amp; Agent Reasoning</div>
+                <input class="comment-input" placeholder="Add a comment... (Press Enter)" onkeydown="if(event.key==='Enter') addComment('${{c.id}}', this)" />
+                <div id="modal-comments">${{commentsHtml}}</div>
+              </div>
+              <div class="modal-right">
+                <select class="status-select ${{stClass}}" onchange="changeStatus('${{c.id}}', this.value)">
+                  <option value="todo" ${{c.column==='todo'?'selected':''}}>TO DO</option>
+                  <option value="prog" ${{c.column==='prog'?'selected':''}}>IN PROGRESS</option>
+                  <option value="hitl" ${{c.column==='hitl'?'selected':''}}>IN REVIEW / HITL</option>
+                  <option value="done" ${{c.column==='done'?'selected':''}}>DONE</option>
+                </select>
+                <div class="detail-box">
+                  <div style="font-size:12.5px; font-weight:700; color:#DEE4EA; margin-bottom:8px;">Details</div>
+                  <div class="detail-row"><span class="detail-lbl">Assignee</span><span><span class="mini-avatar" style="background:${{c.assignee.color}}; width:20px; height:20px; font-size:9px; margin-right:6px;">${{c.assignee.initials}}</span>${{c.assignee.name}}</span></div>
+                  <div class="detail-row"><span class="detail-lbl">Priority</span><span>${{priorityIcon(c.priority)}} ${{c.priority}}</span></div>
+                  <div class="detail-row"><span class="detail-lbl">Story Points</span><span class="sp-badge">${{c.points}}</span></div>
+                  <div class="detail-row"><span class="detail-lbl">Epic / Label</span><span class="jira-epic ${{epicClass(c.category, c.alignment)}}" style="margin:0;">${{c.category}}</span></div>
+                  <div class="detail-row"><span class="detail-lbl">Alignment</span><span style="color:#DEE4EA;">${{c.alignment}}</span></div>
+                  <div class="detail-row"><span class="detail-lbl">Confidence</span><span style="color:#6ee7b7; font-weight:700;">${{c.confidence}}%</span></div>
+                  <div class="detail-row"><span class="detail-lbl">Related</span><span style="color:#93c5fd;">${{(c.related_ids && c.related_ids.length) ? c.related_ids.join(', ') : 'None'}}</span></div>
+                </div>
+              </div>
             </div>
           `;
+          document.getElementById('issue-modal').classList.add('open');
         }}
 
-        function moveCard(cardId, targetCol, newBadgeNote) {{
-          const c = cardsData.find(item => item.id === cardId);
+        function closeIssueModal() {{
+          document.getElementById('issue-modal').classList.remove('open');
+        }}
+
+        function changeStatus(cardId, newCol) {{
+          const c = cardsData.find(x => x.id === cardId);
           if (!c) return;
-          c.column = targetCol;
-          c.alignment = newBadgeNote;
-          renderKanbanBoard();
-          selectKanbanCard(cardId);
+          c.column = newCol;
+          renderBoard();
+          openIssueModal(cardId);
         }}
 
-        renderKanbanBoard();
-        if (selectedCardId) selectKanbanCard(selectedCardId);
+        function addComment(cardId, inputEl) {{
+          const txt = inputEl.value.trim();
+          if (!txt) return;
+          const c = cardsData.find(x => x.id === cardId);
+          if (!c) return;
+          c.comments.unshift({{
+            author: 'You (FDE)',
+            initials: 'FD',
+            color: '#579DFF',
+            time: 'Just now',
+            text: txt
+          }});
+          openIssueModal(cardId);
+        }}
+
+        function openCreateModal() {{
+          document.getElementById('create-modal').classList.add('open');
+          document.getElementById('new-title').focus();
+        }}
+        function closeCreateModal() {{
+          document.getElementById('create-modal').classList.remove('open');
+        }}
+        function submitNewIssue() {{
+          const title = document.getElementById('new-title').value.trim();
+          if (!title) return;
+          const desc = document.getElementById('new-desc').value.trim() || ('As a FinTech stakeholder, I want ' + title + '.');
+          const pri = document.getElementById('new-pri').value;
+          const pts = parseInt(document.getElementById('new-pts').value, 10) || 5;
+          const newId = 'STORY-' + String(cardsData.length + 101);
+          cardsData.unshift({{
+            id: newId,
+            title: title,
+            column: 'todo',
+            issue_type: 'story',
+            alignment: 'NEW',
+            priority: pri,
+            points: pts,
+            category: 'CUSTOM',
+            assignee: {{ name: 'FDE Lead', initials: 'FD', color: '#0C66E4' }},
+            confidence: 95,
+            requires_hitl: pri.includes('P0'),
+            related_ids: [],
+            user_story: desc,
+            technical_description: 'Created directly from Jira Kanban Board.',
+            priority_rationale: pri,
+            alignment_notes: 'Net-new ticket created in board.',
+            acceptance_criteria: [
+              'Automated unit & integration tests pass.',
+              'PII redaction verified before external calls.',
+              'Audit trail emitted to outputs/audit_trail.jsonl.'
+            ],
+            comments: [{{ author: 'You (FDE)', initials: 'FD', color: '#0C66E4', time: 'Just now', text: 'Issue created on Jira board.' }}]
+          }});
+          document.getElementById('new-title').value = '';
+          document.getElementById('new-desc').value = '';
+          closeCreateModal();
+          renderAvatarFilters();
+          renderBoard();
+        }}
+
+        document.addEventListener('keydown', function(e) {{
+          if (e.key === 'Escape') {{
+            closeIssueModal();
+            closeCreateModal();
+          }}
+        }});
+
+        renderAvatarFilters();
+        renderBoard();
       </script>
     </body>
     </html>
     """
-    components.html(kanban_html, height=600, scrolling=True)
+    components.html(kanban_html, height=680, scrolling=True)
 
 
 def render_connected_agent_graph_tab(cfg: ScenarioConfig, latest: BacklogAnalysisResult) -> None:
